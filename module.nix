@@ -70,8 +70,10 @@ in
       type = lib.types.bool;
       default = true;
       description = ''
-        Key rate limits on CF-Connecting-IP / X-Forwarded-For. Leave on behind
-        cloudflared or a proxy; turn off if clients connect directly.
+        Rate-limit by the client address a local tunnel (Pangolin/newt,
+        cloudflared) reports: the rightmost X-Forwarded-For entry, believed
+        only on loopback connections, so clients can't forge it. Turn off if
+        clients connect to the server directly.
       '';
     };
 

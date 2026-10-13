@@ -26,6 +26,7 @@ import {
 } from '../appUpdater';
 import {exportKeyFile, phraseFromEntropy} from '../crypto';
 import {saveTextFile} from '../files';
+import {Notice} from '../components/Notice';
 import {forgetIdentity, loadIdentity, NEEDS_PASSPHRASE} from '../keystore';
 import {platformConfirm} from '../platformConfirm';
 import {session} from '../session';
@@ -180,7 +181,9 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
   const me = session.get();
   const [phrase, setPhrase] = useState<string[] | null>(null);
   const [keyPass, setKeyPass] = useState('');
-  const [keyStatus, setKeyStatus] = useState<string | null>(null);
+  const [keyStatus, setKeyStatus] = useState<
+    {kind: 'working'} | {kind: 'saved'; name: string; location: string} | {kind: 'error'; message: string} | null
+  >(null);
   const [keyBusy, setKeyBusy] = useState(false);
   const [webPass, setWebPass] = useState('');
 
@@ -199,12 +202,12 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
   const saveKeyFile = async () => {
     if (!me) return;
     setKeyBusy(true);
-    setKeyStatus('Encrypting…');
+    setKeyStatus({kind: 'working'});
     try {
-      setKeyStatus(await saveTextFile('superchat-key.json', await exportKeyFile(me, keyPass)));
+      setKeyStatus({kind: 'saved', ...(await saveTextFile('superchat-key.json', await exportKeyFile(me, keyPass)))});
       setKeyPass('');
     } catch (e) {
-      setKeyStatus(`Couldn't save: ${(e as Error).message}`);
+      setKeyStatus({kind: 'error', message: (e as Error).message});
     } finally {
       setKeyBusy(false);
     }
@@ -490,7 +493,18 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
               {keyBusy ? <ActivityIndicator size="small" color={theme.text} /> : <Text style={styles.testButtonText}>Save key file</Text>}
             </Pressable>
           </View>
-          {keyStatus && <Text style={styles.hint}>{keyStatus}</Text>}
+          {keyStatus?.kind === 'working' && <Notice kind="working" title="Encrypting and saving… this takes a few seconds." />}
+          {keyStatus?.kind === 'saved' && (
+            <Notice kind="success" title="Key file saved">
+              {keyStatus.name} is in {keyStatus.location}. Move a copy off this phone; it's only useful together with
+              its passphrase.
+            </Notice>
+          )}
+          {keyStatus?.kind === 'error' && (
+            <Notice kind="error" title="The key file wasn't saved">
+              {keyStatus.message}
+            </Notice>
+          )}
 
           <View style={styles.divider} />
           <Pressable style={styles.dangerButton} onPress={forget}>

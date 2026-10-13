@@ -100,23 +100,29 @@ export async function exportKeyFile(me: Identity, passphrase: string): Promise<s
   return JSON.stringify(file, null, 2);
 }
 
-export async function importKeyFile(json: string, passphrase: string): Promise<Identity> {
+/** Parses a key file without unlocking it. Throws a readable message. */
+export function checkKeyFile(json: string): KeyFile {
   let file: KeyFile;
   try {
     file = JSON.parse(json);
   } catch {
-    throw new Error("That isn't a Super Chat key file.");
+    throw new Error("That isn't a Super Chat key file. It should be the superchat-key.json you saved.");
   }
-  if (file?.v !== 1 || file.kdf !== 'scrypt' || !file.salt || !file.ct) {
-    throw new Error("That isn't a Super Chat key file.");
+  if (file?.v !== 1 || file.kdf !== 'scrypt' || typeof file.salt !== 'string' || typeof file.ct !== 'string') {
+    throw new Error("That isn't a Super Chat key file. It should be the superchat-key.json you saved.");
   }
-  if (file.n > 1 << 20 || file.r > 16 || file.p > 4) throw new Error('Key file parameters are out of range.');
+  if (!(file.n > 0) || file.n > 1 << 20 || file.r > 16 || file.p > 4) throw new Error('This key file looks damaged.');
+  return file;
+}
+
+export async function importKeyFile(json: string, passphrase: string): Promise<Identity> {
+  const file = checkKeyFile(json);
   const key = await scryptAsync(utf8(passphrase), unb64(file.salt), {N: file.n, r: file.r, p: file.p, dkLen: 32});
   let entropy: Uint8Array;
   try {
     entropy = aeadOpen(key, unb64(file.ct), utf8('superchat-key'));
   } catch {
-    throw new Error('Wrong passphrase.');
+    throw new Error("That passphrase doesn't unlock this key file.");
   }
   return identityFromEntropy(entropy);
 }

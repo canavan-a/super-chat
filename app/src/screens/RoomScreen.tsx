@@ -610,7 +610,8 @@ function FileAttachment({roomKey, file, color, styles}: {roomKey: string; file: 
       onPress={async () => {
         setStatus('Decrypting…');
         try {
-          setStatus(await saveFile(file.name, await fetchFile(roomKey, file)));
+          const saved = await saveFile(file.name, await fetchFile(roomKey, file));
+          setStatus(`Saved to ${saved.location} as ${saved.name}`);
         } catch (e) {
           setStatus(`Couldn't save: ${(e as Error).message}`);
         }

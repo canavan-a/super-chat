@@ -3,8 +3,10 @@ package api
 import (
 	"bytes"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -143,15 +145,43 @@ func (l *limiter) allow(key string, now time.Time) bool {
 	return w.n <= l.limit
 }
 
-// clientIP is used only as a rate-limit key and never logged or stored.
+// clientIP is the rate-limit key for a request. It's never logged or stored.
+//
+// Behind Pangolin (newt) or cloudflared, every request reaches the server
+// from the local tunnel end, so the real client is in X-Forwarded-For. Only
+// the rightmost entry can be trusted: it's the one the proxy appended, and
+// anything a client sends in that header itself ends up to its left. The
+// header is only believed on loopback connections (the tunnel); a direct
+// connection is keyed by its own address. CF-Connecting-IP and gin's
+// ClientIP are deliberately not used, since a client can set those freely.
 func (a *API) clientIP(c *gin.Context) string {
-	if a.cfg.TrustProxy {
-		if ip := c.GetHeader("CF-Connecting-IP"); ip != "" {
+	remote := c.RemoteIP()
+	if a.cfg.TrustProxy && isLoopback(remote) {
+		if ip := lastForwardedFor(c.Request.Header.Values("X-Forwarded-For")); ip != "" {
 			return ip
 		}
-		return c.ClientIP()
 	}
-	return c.RemoteIP()
+	return remote
+}
+
+func isLoopback(ip string) bool {
+	p := net.ParseIP(ip)
+	return p != nil && p.IsLoopback()
+}
+
+// lastForwardedFor returns the rightmost address across every
+// X-Forwarded-For header, or "" if it isn't an IP.
+func lastForwardedFor(values []string) string {
+	all := strings.Split(strings.Join(values, ","), ",")
+	for i := len(all) - 1; i >= 0; i-- {
+		if s := strings.TrimSpace(all[i]); s != "" {
+			if p := net.ParseIP(s); p != nil {
+				return p.String()
+			}
+			return ""
+		}
+	}
+	return ""
 }
 
 // rateLimit rejects a request once key(c) has gone over the limiter.

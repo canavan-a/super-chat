@@ -27,21 +27,33 @@ async function read(f: File): Promise<PickedFile> {
   return {name: f.name, mime: f.type || 'application/octet-stream', data: new Uint8Array(await f.arrayBuffer())};
 }
 
-export async function pickTextFile(): Promise<string | null> {
+export interface TextFile {
+  name: string;
+  text: string;
+}
+
+export async function pickTextFile(): Promise<TextFile | null> {
   const [f] = await pick('.json,application/json', false);
-  return f ? unutf8(new Uint8Array(await f.arrayBuffer())) : null;
+  if (!f) return null;
+  if (f.size > 64 * 1024) throw new Error(`${f.name} is too big to be a key file.`);
+  return {name: f.name, text: unutf8(new Uint8Array(await f.arrayBuffer()))};
+}
+
+export interface SavedFile {
+  name: string;
+  location: string;
 }
 
 export const saveTextFile = (name: string, text: string) => saveFile(name, utf8(text));
 
-export async function saveFile(name: string, data: Uint8Array): Promise<string> {
+export async function saveFile(name: string, data: Uint8Array): Promise<SavedFile> {
   const url = URL.createObjectURL(new Blob([data]));
   const a = document.createElement('a');
   a.href = url;
   a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
-  return `Downloaded ${name}.`;
+  return {name, location: "your browser's downloads"};
 }
 
 export async function pickImages(): Promise<PickedFile[]> {

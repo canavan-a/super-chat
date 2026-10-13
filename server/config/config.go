@@ -19,8 +19,9 @@ type Config struct {
 	// /.well-known/assetlinks.json so Android opens invite links in the app.
 	AndroidCertSHA256 []string
 	MaxBlobBytes      int64
-	// TrustProxy makes rate limiting key on CF-Connecting-IP /
-	// X-Forwarded-For (set it behind cloudflared or nginx).
+	// TrustProxy keys rate limits on the rightmost X-Forwarded-For entry of
+	// requests arriving over loopback (Pangolin/newt, cloudflared). See
+	// api.clientIP.
 	TrustProxy bool
 	// StaticDir, when set, serves the built web client on StaticListenAddr.
 	StaticDir        string

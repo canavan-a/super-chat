@@ -25,30 +25,46 @@ async function readAndDelete(path: string): Promise<Uint8Array> {
   }
 }
 
-export async function pickTextFile(): Promise<string | null> {
+export interface TextFile {
+  name: string;
+  text: string;
+}
+
+/** Null if the picker was cancelled. Throws with a readable message. */
+export async function pickTextFile(): Promise<TextFile | null> {
+  let f;
   try {
-    const [f] = await DocumentPicker.pick({type: [DocumentPicker.types.allFiles], copyTo: 'cachesDirectory'});
-    if (!f.fileCopyUri) throw new Error(f.copyError ?? "Couldn't read that file.");
-    return unutf8(await readAndDelete(decodeURI(f.fileCopyUri.replace('file://', ''))));
+    [f] = await DocumentPicker.pick({type: [DocumentPicker.types.allFiles], copyTo: 'cachesDirectory'});
   } catch (e) {
     if (DocumentPicker.isCancel(e)) return null;
-    throw e;
+    throw new Error("Couldn't open the file picker.");
   }
+  if (!f.fileCopyUri) throw new Error(`Couldn't read ${f.name ?? 'that file'}.`);
+  const bytes = await readAndDelete(decodeURI(f.fileCopyUri.replace('file://', '')));
+  if (bytes.length > 64 * 1024) throw new Error(`${f.name ?? 'That file'} is too big to be a key file.`);
+  return {name: f.name ?? 'key file', text: unutf8(bytes)};
 }
 
-/** Saves to Downloads. Returns a message saying where. */
-export async function saveTextFile(name: string, text: string): Promise<string> {
-  return saveFile(name, utf8(text));
+export interface SavedFile {
+  name: string;
+  /** Human-readable folder, e.g. "Downloads". */
+  location: string;
 }
 
-export async function saveFile(name: string, data: Uint8Array): Promise<string> {
+export const saveTextFile = (name: string, text: string): Promise<SavedFile> => saveFile(name, utf8(text));
+
+/** Saves to Downloads (renaming rather than overwriting). */
+export async function saveFile(name: string, data: Uint8Array): Promise<SavedFile> {
   const safe = name.replace(/[^\w.\- ]/g, '_') || 'file';
   let path = `${RNFS.DownloadDirectoryPath}/${safe}`;
   for (let i = 1; await RNFS.exists(path); i++) {
     path = `${RNFS.DownloadDirectoryPath}/${safe.replace(/(\.[^.]*)?$/, ` (${i})$1`)}`;
   }
   await RNFS.writeFile(path, base64.encode(data), 'base64');
-  return `Saved to Downloads as ${path.split('/').pop()}.`;
+  // Without this the file is on disk but Android's Files/Downloads views
+  // don't list it until the media scanner happens to come by.
+  await RNFS.scanFile(path).catch(() => {});
+  return {name: path.split('/').pop()!, location: 'Downloads'};
 }
 
 export async function pickImages(): Promise<PickedFile[]> {

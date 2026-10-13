@@ -68,7 +68,8 @@ describe('identity', () => {
     const me = newIdentity();
     const file = await exportKeyFile(me, 'correct horse');
     expect((await importKeyFile(file, 'correct horse')).id).toBe(me.id);
-    await expect(importKeyFile(file, 'wrong')).rejects.toThrow(/Wrong passphrase/);
+    await expect(importKeyFile(file, 'wrong')).rejects.toThrow(/doesn't unlock/);
+    await expect(importKeyFile('{"hello":1}', 'x')).rejects.toThrow(/isn't a Super Chat key file/);
   });
 
   it('is a different, unrelated member in every room', () => {

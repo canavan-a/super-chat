@@ -35,7 +35,9 @@ type API struct {
 	vaultsPerIP  *limiter
 	joinsPerIP   *limiter
 	msgsPerAcct  *limiter
+	msgsPerIP    *limiter
 	blobsPerAcct *limiter
+	blobsPerIP   *limiter
 	readsPerAcct *limiter
 }
 
@@ -46,7 +48,11 @@ func New(db *gorm.DB, cfg config.Config, svc *rooms.Service) *API {
 		vaultsPerIP:  newLimiter(120, time.Hour),
 		joinsPerIP:   newLimiter(30, time.Hour),
 		msgsPerAcct:  newLimiter(240, time.Minute),
-		blobsPerAcct: newLimiter(120, time.Hour),
+		msgsPerIP:    newLimiter(600, time.Minute),
+		blobsPerAcct: newLimiter(60, time.Hour),
+		// Member keys are free (make a room, get a key), so per-member limits
+		// alone don't cap one client; these per-IP ones do.
+		blobsPerIP:   newLimiter(40, time.Hour),
 		readsPerAcct: newLimiter(1200, time.Minute),
 	}
 	svc.OnEvent = a.onEvent
@@ -61,6 +67,8 @@ func (a *API) SetClock(now func() time.Time) { a.now = now; a.rooms.Now = now }
 func (a *API) Router() *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	// clientIP reads forwarding headers itself, only from the local tunnel.
+	_ = r.SetTrustedProxies(nil)
 	// gin.Logger is left out on purpose: request lines would record who
 	// talked to which room and when.
 	r.Use(gin.Recovery())
@@ -91,16 +99,16 @@ func (a *API) Router() *gin.Engine {
 	signed.PUT("/vault/:id", a.rateLimit(a.vaultsPerIP, byIP), a.putVault)
 	signed.POST("/rooms", a.rateLimit(a.roomsPerIP, byIP), a.createRoom)
 	signed.GET("/rooms/:id/state", a.rateLimit(a.readsPerAcct, byAcct), a.roomState)
-	signed.POST("/rooms/:id/events", a.rateLimit(a.msgsPerAcct, byAcct), a.appendEvents)
+	signed.POST("/rooms/:id/events", a.rateLimit(a.msgsPerIP, byIP), a.rateLimit(a.msgsPerAcct, byAcct), a.appendEvents)
 	signed.GET("/rooms/:id/keys", a.rateLimit(a.readsPerAcct, byAcct), a.roomKeys)
 	signed.GET("/rooms/:id/messages", a.rateLimit(a.readsPerAcct, byAcct), a.listMessages)
-	signed.POST("/rooms/:id/messages", a.rateLimit(a.msgsPerAcct, byAcct), a.postMessage)
+	signed.POST("/rooms/:id/messages", a.rateLimit(a.msgsPerIP, byIP), a.rateLimit(a.msgsPerAcct, byAcct), a.postMessage)
 	signed.GET("/rooms/:id/invites/uses", a.rateLimit(a.readsPerAcct, byAcct), a.inviteUses)
 	signed.GET("/rooms/:id/blobs/:blob", a.rateLimit(a.readsPerAcct, byAcct), a.getBlob)
 	signed.POST("/invites/:id/join", a.rateLimit(a.joinsPerIP, byIP), a.joinInvite)
 
 	blobs := v1.Group("", a.requireSignature(a.cfg.MaxBlobBytes))
-	blobs.PUT("/rooms/:id/blobs", a.rateLimit(a.blobsPerAcct, byAcct), a.putBlob)
+	blobs.PUT("/rooms/:id/blobs", a.rateLimit(a.blobsPerIP, byIP), a.rateLimit(a.blobsPerAcct, byAcct), a.putBlob)
 
 	return r
 }
