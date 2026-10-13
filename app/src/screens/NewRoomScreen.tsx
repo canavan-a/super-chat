@@ -231,6 +231,6 @@ function makeStyles(theme: Theme) {
     },
     cardTitle: {fontSize: 18, fontWeight: '800', color: theme.text},
     homeCenter: {alignItems: 'center', justifyContent: 'center', padding: 24},
-    homeButton: {alignSelf: 'stretch', maxWidth: 320, width: '100%'},
+    homeButton: {alignSelf: 'center', maxWidth: 320, width: '100%'},
   });
 }

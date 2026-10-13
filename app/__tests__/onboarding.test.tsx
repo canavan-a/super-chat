@@ -11,10 +11,11 @@ const picked: {next: any} = {next: null};
 const saved: {calls: number; fail: boolean} = {calls: 0, fail: false};
 jest.mock('../src/files', () => ({
   pickTextFile: async () => picked.next,
-  saveTextFile: async () => {
+  saveTextFileAs: async (_name: string, makeText: () => Promise<string>) => {
     saved.calls++;
+    await makeText();
     if (saved.fail) throw new Error('disk full');
-    return {name: 'superchat-key.json', location: 'Downloads'};
+    return {name: 'superchat-key.json', location: 'the folder you picked'};
   },
 }));
 jest.mock('../src/keystore', () => ({
@@ -95,7 +96,7 @@ describe('onboarding', () => {
     await flush();
     expect(saved.calls).toBe(1);
     expect(texts(tree)).toContain('Key file saved');
-    expect(texts(tree)).toContain('Downloads');
+    expect(texts(tree)).toContain('the folder you picked');
     await press(tree, 'Continue');
     await flush();
     expect(texts(tree)).not.toContain('Check your phrase');

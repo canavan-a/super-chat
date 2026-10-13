@@ -24,7 +24,7 @@ import {
   phraseFromEntropy,
   randomBytes,
 } from '../crypto';
-import {pickTextFile, saveTextFile} from '../files';
+import {pickTextFile, saveTextFileAs} from '../files';
 import {NEEDS_PASSPHRASE, storeIdentity} from '../keystore';
 import {LogoArt} from '../logo/LogoArt';
 import {Theme, useTheme} from '../theme';
@@ -271,8 +271,8 @@ function ShowPhrase({
   const saveKeyFile = async () => {
     setSave({kind: 'working'});
     try {
-      const file = await saveTextFile('superchat-key.json', await exportKeyFile(me, pass));
-      setSave({kind: 'saved', ...file});
+      const file = await saveTextFileAs('superchat-key.json', () => exportKeyFile(me, pass));
+      setSave(file ? {kind: 'saved', ...file} : null);
     } catch (e) {
       setSave({kind: 'error', message: (e as Error).message});
     }

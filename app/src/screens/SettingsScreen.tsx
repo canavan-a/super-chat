@@ -25,7 +25,7 @@ import {
   runUpdate,
 } from '../appUpdater';
 import {exportKeyFile, phraseFromEntropy} from '../crypto';
-import {saveTextFile} from '../files';
+import {saveTextFileAs} from '../files';
 import {Notice} from '../components/Notice';
 import {forgetIdentity, loadIdentity, NEEDS_PASSPHRASE} from '../keystore';
 import {platformConfirm} from '../platformConfirm';
@@ -204,8 +204,9 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
     setKeyBusy(true);
     setKeyStatus({kind: 'working'});
     try {
-      setKeyStatus({kind: 'saved', ...(await saveTextFile('superchat-key.json', await exportKeyFile(me, keyPass)))});
-      setKeyPass('');
+      const file = await saveTextFileAs('superchat-key.json', () => exportKeyFile(me, keyPass));
+      setKeyStatus(file ? {kind: 'saved', ...file} : null);
+      if (file) setKeyPass('');
     } catch (e) {
       setKeyStatus({kind: 'error', message: (e as Error).message});
     } finally {

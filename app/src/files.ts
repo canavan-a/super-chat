@@ -5,6 +5,7 @@
 import DocumentPicker from 'react-native-document-picker';
 import {launchImageLibrary} from 'react-native-image-picker';
 import RNFS from 'react-native-fs';
+import {NativeModules} from 'react-native';
 import {base64} from '@scure/base';
 
 import {unutf8, utf8} from './crypto';
@@ -51,7 +52,29 @@ export interface SavedFile {
   location: string;
 }
 
-export const saveTextFile = (name: string, text: string): Promise<SavedFile> => saveFile(name, utf8(text));
+interface FileSaverNative {
+  create(name: string, mime: string): Promise<string | null>;
+  write(uri: string, base64: string): Promise<string | null>;
+  discard(uri: string): Promise<void>;
+}
+const FileSaver = NativeModules.FileSaver as FileSaverNative;
+
+/**
+ * "Save as…": opens the system save dialog first, so the user picks the folder
+ * (it remembers the last one), then builds the text, which may be slow. Null
+ * if the dialog was cancelled.
+ */
+export async function saveTextFileAs(name: string, makeText: () => Promise<string>): Promise<SavedFile | null> {
+  const uri = await FileSaver.create(name, 'application/json');
+  if (!uri) return null;
+  try {
+    const saved = await FileSaver.write(uri, base64.encode(utf8(await makeText())));
+    return {name: saved ?? name, location: 'the folder you picked'};
+  } catch (e) {
+    FileSaver.discard(uri).catch(() => {});
+    throw e;
+  }
+}
 
 /** Saves to Downloads (renaming rather than overwriting). */
 export async function saveFile(name: string, data: Uint8Array): Promise<SavedFile> {

@@ -5,7 +5,7 @@
 // so no server can link your rooms to each other or to you.
 import {entropyToMnemonic, mnemonicToEntropy, validateMnemonic} from '@scure/bip39';
 import {wordlist} from '@scure/bip39/wordlists/english';
-import {scryptAsync} from '@noble/hashes/scrypt';
+import {scrypt} from './kdf';
 
 import {memberIdFromPub, randomBytes, unb64, utf8, b64} from './encoding';
 import {aeadOpen, aeadSeal, edPublicKey, hkdf, xPublicKey} from './primitives';
@@ -68,9 +68,9 @@ export const WORDLIST = wordlist;
 
 // ---- key file ----
 
-// scrypt cost for the key file. 2^15 keeps unlocking a few seconds on a
-// phone's JS engine; the file is useless without the passphrase anyway, and
-// the passphrase is the only thing this protects.
+// scrypt cost for the key file. 2^15 is well under a second natively (kdf.ts)
+// and a few seconds in a phone's JS engine; the file is useless without the
+// passphrase anyway, and the passphrase is the only thing this protects.
 const SCRYPT = {N: 1 << 15, r: 8, p: 1};
 
 export interface KeyFile {
@@ -86,7 +86,7 @@ export interface KeyFile {
 
 export async function exportKeyFile(me: Identity, passphrase: string): Promise<string> {
   const salt = randomBytes(16);
-  const key = await scryptAsync(utf8(passphrase), salt, {...SCRYPT, dkLen: 32});
+  const key = await scrypt(utf8(passphrase), salt, {...SCRYPT, dkLen: 32});
   const file: KeyFile = {
     v: 1,
     kdf: 'scrypt',
@@ -117,7 +117,7 @@ export function checkKeyFile(json: string): KeyFile {
 
 export async function importKeyFile(json: string, passphrase: string): Promise<Identity> {
   const file = checkKeyFile(json);
-  const key = await scryptAsync(utf8(passphrase), unb64(file.salt), {N: file.n, r: file.r, p: file.p, dkLen: 32});
+  const key = await scrypt(utf8(passphrase), unb64(file.salt), {N: file.n, r: file.r, p: file.p, dkLen: 32});
   let entropy: Uint8Array;
   try {
     entropy = aeadOpen(key, unb64(file.ct), utf8('superchat-key'));

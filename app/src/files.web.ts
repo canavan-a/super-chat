@@ -44,7 +44,10 @@ export interface SavedFile {
   location: string;
 }
 
-export const saveTextFile = (name: string, text: string) => saveFile(name, utf8(text));
+// Browsers have no save dialog to open first; this just downloads.
+export async function saveTextFileAs(name: string, makeText: () => Promise<string>): Promise<SavedFile | null> {
+  return saveFile(name, utf8(await makeText()));
+}
 
 export async function saveFile(name: string, data: Uint8Array): Promise<SavedFile> {
   const url = URL.createObjectURL(new Blob([data]));

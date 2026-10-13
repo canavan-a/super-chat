@@ -19,6 +19,8 @@ class MainApplication : Application(), ReactApplication {
             PackageList(this).packages.apply {
               add(AppUpdaterPackage())
               add(AppIconPackage())
+              add(FileSaverPackage())
+              add(ScryptPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"
