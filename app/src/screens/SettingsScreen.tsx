@@ -32,7 +32,7 @@ import {Notice} from '../components/Notice';
 import {forgetIdentity, loadIdentity, NEEDS_PASSPHRASE} from '../keystore';
 import {platformConfirm} from '../platformConfirm';
 import {session} from '../session';
-import {DEFAULT_SERVER, normalizeServer, settingsStore} from '../settings';
+import {DEFAULT_SERVER, normalizeServer, QUICK_REACTIONS, settingsStore} from '../settings';
 import {getMyAvatar, resetStore, setMyAvatar, useStore} from '../store';
 import {THEME_OPTIONS, Theme, useThemeSetting} from '../theme';
 
@@ -302,6 +302,20 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
               </Pressable>
             ))}
           </View>
+
+          <Text style={[styles.label, styles.spaced]}>Double-tap reaction</Text>
+          <View style={styles.themeRow}>
+            {QUICK_REACTIONS.map(e => (
+              <Pressable
+                key={e}
+                style={[styles.reactionChoice, s.doubleTapReaction === e && styles.themeSwatchActive]}
+                onPress={() => settingsStore.update({doubleTapReaction: e})}
+                accessibilityLabel={`Double-tap reacts with ${e}`}>
+                <Text style={styles.reactionChoiceText}>{e}</Text>
+              </Pressable>
+            ))}
+          </View>
+          <Text style={styles.hint}>What double-tapping a message reacts with. Tap a reaction to take yours back.</Text>
 
           <View style={[styles.rowBetween, styles.spaced]}>
             <View style={styles.rowBetweenText}>
@@ -651,6 +665,17 @@ function makeStyles(theme: Theme) {
       flexWrap: 'wrap',
       gap: 10,
     },
+    reactionChoice: {
+      width: 44,
+      height: 44,
+      borderRadius: 10,
+      borderWidth: 2,
+      borderColor: theme.border,
+      backgroundColor: theme.surface,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    reactionChoiceText: {fontSize: 20},
     themeSwatch: {
       alignItems: 'center',
       gap: 6,

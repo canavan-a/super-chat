@@ -4,3 +4,4 @@ export const getSealed = async (_blob: string): Promise<Uint8Array | null> => nu
 export const putSealed = async (_blob: string, _sealed: Uint8Array): Promise<void> => {};
 export const clearSealed = async (): Promise<void> => {};
 export const removeSealed = async (_blobs: string[]): Promise<void> => {};
+export const noteCached = (): void => {};

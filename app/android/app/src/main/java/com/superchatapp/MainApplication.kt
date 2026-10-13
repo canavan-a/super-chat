@@ -22,6 +22,7 @@ class MainApplication : Application(), ReactApplication {
               add(FileSaverPackage())
               add(ScryptPackage())
               add(ImageCropPackage())
+              add(BlobPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"

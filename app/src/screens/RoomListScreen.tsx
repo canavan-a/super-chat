@@ -1,10 +1,12 @@
-import React, {useMemo, useState} from 'react';
+import React, {useMemo, useRef, useState} from 'react';
 import {ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View} from 'react-native';
 
 import {Icon} from '../components/Icon';
 import {Overlay} from '../components/Overlay';
+import {PixelField} from '../components/PixelField';
+import {SpringyPull} from '../components/SpringyPull';
 import {Route} from '../routes';
-import {RoomListItem} from '../store';
+import {refreshAll, RoomListItem} from '../store';
 import {Theme, useTheme} from '../theme';
 
 /**
@@ -24,6 +26,7 @@ export function RoomListScreen({
   const theme = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const [addOpen, setAddOpen] = useState(false);
+  const scrollY = useRef(0);
   const showServer = new Set(rooms.map(r => r.server)).size > 1;
 
   const go = (route: Route) => {
@@ -39,54 +42,61 @@ export function RoomListScreen({
           <Text style={styles.muted}>Loading your rooms…</Text>
         </View>
       ) : (
-        <FlatList
-          data={rooms}
-          keyExtractor={r => r.key}
-          contentContainerStyle={rooms.length === 0 ? styles.emptyContent : styles.listContent}
-          renderItem={({item}) => {
-            // Unread: bold, the preview in full color, a count badge, and a
-            // tinted row. Caught up: plain, with a muted preview.
-            const unread = item.unread || item.unreadCount > 0;
-            return (
-              <Pressable
-                style={({pressed}) => [
-                  styles.row,
-                  {borderLeftColor: item.color},
-                  unread && styles.rowUnread,
-                  pressed && styles.rowPressed,
-                ]}
-                onPress={() => onNavigate({name: 'room', key: item.key})}>
-                <View style={styles.rowTop}>
-                  <Text style={[styles.rowTitle, unread && styles.rowTitleUnread]} numberOfLines={1}>
-                    {item.name}
-                  </Text>
-                  <Text style={[styles.rowTime, unread && styles.rowTimeUnread]}>
-                    {item.lastAt ? timeAgo(item.lastAt) : ''}
-                  </Text>
-                </View>
-                <View style={styles.rowBottom}>
-                  <Text style={[styles.rowPreview, unread && styles.rowPreviewUnread]} numberOfLines={1}>
-                    {showServer ? item.server.replace(/^https?:\/\//, '') + ' · ' : ''}
-                    {item.preview ?? (unread ? 'New messages' : 'No messages yet')}
-                  </Text>
-                  {unread && (
-                    <View style={styles.badge}>
-                      <Text style={styles.badgeText}>
-                        {item.unreadCount > 0 ? (item.unreadCount > 99 ? '99+' : item.unreadCount) : ''}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-              </Pressable>
-            );
-          }}
-          ListEmptyComponent={
-            <View style={styles.center}>
-              <Text style={styles.emptyTitle}>No rooms yet</Text>
-              <Text style={styles.muted}>Rooms are invite-only. Tap + to start one, or join with an invite link.</Text>
-            </View>
-          }
-        />
+        <SpringyPull
+          atTop={() => scrollY.current <= 0}
+          onRefresh={refreshAll}
+          background={pull => <PixelField pull={pull} />}>
+          <FlatList
+            data={rooms}
+            keyExtractor={r => r.key}
+            onScroll={e => (scrollY.current = e.nativeEvent.contentOffset.y)}
+            scrollEventThrottle={32}
+            contentContainerStyle={rooms.length === 0 ? styles.emptyContent : styles.listContent}
+            renderItem={({item}) => {
+              // Unread: bold, the preview in full color, a count badge, and a
+              // tinted row. Caught up: plain, with a muted preview.
+              const unread = item.unread || item.unreadCount > 0;
+              return (
+                <Pressable
+                  style={({pressed}) => [
+                    styles.row,
+                    {borderLeftColor: item.color},
+                    unread && styles.rowUnread,
+                    pressed && styles.rowPressed,
+                  ]}
+                  onPress={() => onNavigate({name: 'room', key: item.key})}>
+                  <View style={styles.rowTop}>
+                    <Text style={[styles.rowTitle, unread && styles.rowTitleUnread]} numberOfLines={1}>
+                      {item.name}
+                    </Text>
+                    <Text style={[styles.rowTime, unread && styles.rowTimeUnread]}>
+                      {item.lastAt ? timeAgo(item.lastAt) : ''}
+                    </Text>
+                  </View>
+                  <View style={styles.rowBottom}>
+                    <Text style={[styles.rowPreview, unread && styles.rowPreviewUnread]} numberOfLines={1}>
+                      {showServer ? item.server.replace(/^https?:\/\//, '') + ' · ' : ''}
+                      {item.preview ?? (unread ? 'New messages' : 'No messages yet')}
+                    </Text>
+                    {unread && (
+                      <View style={styles.badge}>
+                        <Text style={styles.badgeText}>
+                          {item.unreadCount > 0 ? (item.unreadCount > 99 ? '99+' : item.unreadCount) : ''}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                </Pressable>
+              );
+            }}
+            ListEmptyComponent={
+              <View style={styles.center}>
+                <Text style={styles.emptyTitle}>No rooms yet</Text>
+                <Text style={styles.muted}>Rooms are invite-only. Tap + to start one, or join with an invite link.</Text>
+              </View>
+            }
+          />
+        </SpringyPull>
       )}
 
       <Pressable

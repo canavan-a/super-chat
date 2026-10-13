@@ -22,7 +22,9 @@ import {Icon} from '../components/Icon';
 import {Overlay} from '../components/Overlay';
 import {MarkdownText} from '../components/Markdown';
 import {TypingDots} from '../components/TypingDots';
+import {tick} from '../haptics';
 import {platformConfirm} from '../platformConfirm';
+import {QUICK_REACTIONS, settingsStore} from '../settings';
 import {Route} from '../routes';
 import {
   ChatMessage,
@@ -45,7 +47,6 @@ import {
 } from '../store';
 import {Theme, useTheme} from '../theme';
 
-const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
 
 type Styles = ReturnType<typeof makeStyles>;
 
@@ -88,14 +89,10 @@ export function RoomScreen({
       subtitle: `${view.members.length} member${view.members.length === 1 ? '' : 's'} · end-to-end encrypted${
         view.retentionDays ? ` · ${view.retentionDays}d` : ''
       }`,
-      actions: [
-        ...(isAdmin
-          ? [{label: 'Invite', icon: 'invite' as const, onPress: () => onNavigate({name: 'roomSettings', key: roomKey})}]
-          : []),
-        {label: 'Room settings', icon: 'kebab' as const, onPress: () => onNavigate({name: 'roomSettings', key: roomKey})},
-      ],
+      // Tapping the header opens the room's controls (members, invites, settings).
+      onPress: () => onNavigate({name: 'roomSettings', key: roomKey}),
     });
-  }, [view, isAdmin, roomKey, onHeaderChange, onNavigate]);
+  }, [view, roomKey, onHeaderChange, onNavigate]);
 
   // Read receipts: the newest message counts as read while this room is on
   // screen and the app is in the foreground.
@@ -322,7 +319,9 @@ function ChatList({
   const listRef = useRef<FlatList>(null);
   const [showJump, setShowJump] = useState(false);
   const [menuFor, setMenuFor] = useState<ChatMessage | null>(null);
-  const [viewer, setViewerRaw] = useState<{uri: string; ref: FileRef; data: Uint8Array} | null>(null);
+  // Long-press on a message's reactions: the sheet listing who reacted with what.
+  const [whoFor, setWhoFor] = useState<ChatMessage | null>(null);
+  const [viewer, setViewerRaw] = useState<{uri: string; ref: FileRef} | null>(null);
   const [viewerSave, setViewerSave] = useState<'saving' | 'saved' | {error: string} | null>(null);
   const setViewer = (v: typeof viewer) => {
     setViewerSave(null);
@@ -332,7 +331,7 @@ function ChatList({
     if (!viewer || viewerSave === 'saving') return;
     setViewerSave('saving');
     try {
-      const saved = await saveFileAs(viewer.ref.name, viewer.ref.mime, async () => viewer.data);
+      const saved = await saveFileAs(viewer.ref.name, viewer.ref.mime, () => fetchFile(room.key, viewer.ref));
       setViewerSave(saved ? 'saved' : null);
     } catch (e) {
       setViewerSave({error: (e as Error).message || "Couldn't save"});
@@ -393,9 +392,14 @@ function ChatList({
         roomKey={room.key}
         styles={styles}
         theme={theme}
-        onLongPress={() => item.content && !item.pending && setMenuFor(item)}
+        onLongPress={() => {
+          if (!item.content || item.pending) return;
+          tick();
+          setMenuFor(item);
+        }}
         onReact={emoji => react(room.key, item.id, emoji).catch(() => {})}
         onOpenImage={setViewer}
+        onShowReactions={setWhoFor}
       />
     );
   };
@@ -513,6 +517,20 @@ function ChatList({
           </View>
       </Overlay>
 
+      <Overlay visible={whoFor !== null} onClose={() => setWhoFor(null)} style={styles.sheetBackdrop}>
+        <View style={styles.sheet}>
+          {whoFor &&
+            Object.entries(room.reactions[whoFor.id] ?? {})
+              .filter(([, who]) => who.length > 0)
+              .map(([emoji, who]) => (
+                <View key={emoji} style={styles.whoRow}>
+                  <Text style={styles.whoEmoji}>{emoji}</Text>
+                  <Text style={styles.whoNames}>{who.map(id => (id === meId ? 'You' : nameOf(id))).join(', ')}</Text>
+                </View>
+              ))}
+        </View>
+      </Overlay>
+
       <Overlay visible={viewer !== null} onClose={() => setViewer(null)} backdrop="rgba(0,0,0,0.92)" style={styles.viewerBackdrop}>
         <View style={styles.viewerInner} pointerEvents="box-none">
           {viewer && <Image source={{uri: viewer.uri}} style={styles.viewerImage} resizeMode="contain" />}
@@ -539,6 +557,9 @@ function ChatList({
 
 /** Messages from one sender this close together stack as a group: one name, one time. */
 const GROUP_MS = 3 * 60_000;
+
+/** Two taps closer than this are a double-tap (which reacts). */
+const DOUBLE_TAP_MS = 280;
 const sameGroup = (a: ChatMessage, b: ChatMessage) => a.sender === b.sender && b.createdAt - a.createdAt < GROUP_MS;
 
 const MessageRow = React.memo(function MessageRow({
@@ -559,6 +580,7 @@ const MessageRow = React.memo(function MessageRow({
   onLongPress,
   onReact,
   onOpenImage,
+  onShowReactions,
 }: {
   msg: ChatMessage;
   mine: boolean;
@@ -578,11 +600,53 @@ const MessageRow = React.memo(function MessageRow({
   theme: Theme;
   onLongPress: () => void;
   onReact: (emoji: string) => void;
-  onOpenImage: (v: {uri: string; ref: FileRef; data: Uint8Array}) => void;
+  onOpenImage: (v: {uri: string; ref: FileRef}) => void;
+  /** Long-press on the reactions: who reacted with what. */
+  onShowReactions: (m: ChatMessage) => void;
 }): React.JSX.Element {
   const c = msg.content;
   const textColor = mine ? theme.bubbleUserText : theme.bubbleAssistantText;
   const time = new Date(msg.createdAt).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+
+  // Reactions: who reacted with what, and which are mine.
+  const entries = reactions ? Object.entries(reactions).filter(([, who]) => who.length > 0) : [];
+  const total = entries.reduce((n, [, who]) => n + who.length, 0);
+  const mineReacted = entries.filter(([, who]) => who.includes(meId)).map(([e]) => e);
+  const canReact = !!c && !msg.pending;
+
+  // Double-tap adds the default reaction (from Settings); it never removes
+  // one (tap the reactions to do that). A single tap's own action (opening an
+  // image, saving a file) waits a moment, in case a second tap is coming.
+  const lastTap = useRef(0);
+  const singleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (singleTimer.current) clearTimeout(singleTimer.current);
+    },
+    [],
+  );
+  const tap = (single?: () => void) => {
+    const now = Date.now();
+    if (now - lastTap.current < DOUBLE_TAP_MS) {
+      lastTap.current = 0;
+      if (singleTimer.current) clearTimeout(singleTimer.current);
+      const e = settingsStore.get().doubleTapReaction;
+      if (canReact && !reactions?.[e]?.includes(meId)) {
+        tick();
+        onReact(e);
+      }
+      return;
+    }
+    lastTap.current = now;
+    if (single) singleTimer.current = setTimeout(single, DOUBLE_TAP_MS);
+  };
+  // Tapping the reactions takes mine back off, or joins in with the default.
+  const tapReactions = () => {
+    if (!canReact) return;
+    if (mineReacted.length) mineReacted.forEach(e => onReact(e));
+    else onReact(settingsStore.get().doubleTapReaction);
+  };
+
   return (
     <View style={[styles.rowOuter, mine ? styles.rowOuterMine : null, grouped && styles.rowGrouped]}>
       {!mine && (
@@ -592,52 +656,78 @@ const MessageRow = React.memo(function MessageRow({
       )}
       <View style={[styles.row, mine ? styles.rowMine : styles.rowTheirs]}>
         {showName && <Text style={styles.senderName}>{name}</Text>}
-        <Pressable
-          style={[
-            styles.bubble,
-            mine ? styles.bubbleMine : styles.bubbleTheirs,
-            msg.pending && styles.bubblePending,
-            !c && styles.bubbleBroken,
-          ]}
-          onLongPress={onLongPress}
-          delayLongPress={300}>
-          {reply && (
-            <View style={[styles.quote, {borderLeftColor: mine ? theme.bubbleUserText : theme.primary}]}>
-              <Text style={[styles.quoteName, {color: textColor}]}>{nameOf(reply.sender)}</Text>
-              <Text style={[styles.quoteText, {color: textColor}]} numberOfLines={2}>
-                {reply.content?.t === 'text' ? reply.content.body : reply.content?.t === 'file' ? '📎 Attachment' : 'Message'}
-              </Text>
-            </View>
-          )}
-          {!c && <Text style={[styles.brokenText, {color: textColor}]}>🔒 {msg.error ?? 'Encrypted message'}</Text>}
-          {c?.t === 'file' &&
-            c.files.map(f =>
-              f.mime.startsWith('image/') ? (
-                <ImageAttachment key={f.blob} roomKey={roomKey} file={f} styles={styles} theme={theme} onOpen={onOpenImage} />
-              ) : (
-                <FileAttachment key={f.blob} roomKey={roomKey} file={f} color={textColor} styles={styles} />
-              ),
-            )}
-          {c && (c.t === 'text' || (c.t === 'file' && c.body)) ? (
-            <MarkdownText text={c.t === 'text' ? c.body : c.body!} color={textColor} theme={theme} />
-          ) : null}
-        </Pressable>
-        {(lastInGroup || msg.pending) && <Text style={styles.time}>{msg.pending ? 'sending…' : time}</Text>}
-        {reactions && Object.keys(reactions).length > 0 && (
-          <View style={[styles.reactions, mine && styles.reactionsMine]}>
-            {Object.entries(reactions).map(([emoji, who]) => (
-              <Pressable
-                key={emoji}
-                style={[styles.reactionChip, who.includes(meId) && styles.reactionChipMine]}
-                onPress={() => onReact(emoji)}
-                accessibilityLabel={`${emoji} from ${who.map(nameOf).join(', ')}`}>
-                <Text style={styles.reactionText}>
-                  {emoji} {who.length > 1 ? who.length : ''}
+        <View style={[styles.bubbleWrap, entries.length > 0 && styles.bubbleWrapReacted]}>
+          <Pressable
+            style={[
+              styles.bubble,
+              mine ? styles.bubbleMine : styles.bubbleTheirs,
+              msg.pending && styles.bubblePending,
+              !c && styles.bubbleBroken,
+            ]}
+            onPress={() => tap()}
+            onLongPress={onLongPress}
+            delayLongPress={300}>
+            {reply && (
+              <View style={[styles.quote, {borderLeftColor: mine ? theme.bubbleUserText : theme.primary}]}>
+                <Text style={[styles.quoteName, {color: textColor}]}>{nameOf(reply.sender)}</Text>
+                <Text style={[styles.quoteText, {color: textColor}]} numberOfLines={2}>
+                  {reply.content?.t === 'text' ? reply.content.body : reply.content?.t === 'file' ? '📎 Attachment' : 'Message'}
                 </Text>
-              </Pressable>
-            ))}
-          </View>
-        )}
+              </View>
+            )}
+            {!c && <Text style={[styles.brokenText, {color: textColor}]}>🔒 {msg.error ?? 'Encrypted message'}</Text>}
+            {c?.t === 'file' &&
+              c.files.map(f =>
+                f.mime.startsWith('image/') ? (
+                  <ImageAttachment
+                    key={f.blob}
+                    roomKey={roomKey}
+                    file={f}
+                    styles={styles}
+                    theme={theme}
+                    onOpen={onOpenImage}
+                    onTap={tap}
+                    onLongPress={onLongPress}
+                  />
+                ) : (
+                  <FileAttachment
+                    key={f.blob}
+                    roomKey={roomKey}
+                    file={f}
+                    color={textColor}
+                    styles={styles}
+                    onTap={tap}
+                    onLongPress={onLongPress}
+                  />
+                ),
+              )}
+            {c && (c.t === 'text' || (c.t === 'file' && c.body)) ? (
+              <MarkdownText text={c.t === 'text' ? c.body : c.body!} color={textColor} theme={theme} />
+            ) : null}
+          </Pressable>
+          {entries.length > 0 && (
+            // On the bubble's inner bottom corner: up to three emoji stacked
+            // over each other, and the total when more than one person reacted.
+            <Pressable
+              style={[styles.reactPill, mine ? styles.reactPillMine : styles.reactPillTheirs, mineReacted.length > 0 && styles.reactPillOwn]}
+              onPress={tapReactions}
+              onLongPress={() => {
+                tick();
+                onShowReactions(msg);
+              }}
+              delayLongPress={300}
+              hitSlop={6}
+              accessibilityLabel={entries.map(([e, who]) => `${e} from ${who.map(nameOf).join(', ')}`).join('; ')}>
+              {entries.slice(0, 3).map(([e], i) => (
+                <Text key={e} style={[styles.reactPillEmoji, i > 0 && styles.reactPillEmojiStacked]}>
+                  {e}
+                </Text>
+              ))}
+              {total > 1 && <Text style={styles.reactPillCount}>{total}</Text>}
+            </Pressable>
+          )}
+        </View>
+        {(lastInGroup || msg.pending) && <Text style={styles.time}>{msg.pending ? 'sending…' : time}</Text>}
         {seenBy && seenBy.length > 0 && <Text style={styles.seen}>Seen by {seenBy.join(', ')}</Text>}
       </View>
     </View>
@@ -650,12 +740,17 @@ function ImageAttachment({
   styles,
   theme,
   onOpen,
+  onTap,
+  onLongPress,
 }: {
   roomKey: string;
   file: FileRef;
   styles: Styles;
   theme: Theme;
-  onOpen: (v: {uri: string; ref: FileRef; data: Uint8Array}) => void;
+  onOpen: (v: {uri: string; ref: FileRef}) => void;
+  /** The message's tap handler: runs `single` unless it turns into a double-tap (a reaction). */
+  onTap: (single?: () => void) => void;
+  onLongPress: () => void;
 }) {
   // Straight from memory when it's been shown before: no spinner, no reload.
   const [img, setImg] = useState<ShownImage | null>(() => peekImage(file));
@@ -674,7 +769,10 @@ function ImageAttachment({
   const ratio = file.w && file.h ? file.w / file.h : 4 / 3;
   if (failed) return <Text style={styles.brokenText}>🔒 Image unavailable</Text>;
   return (
-    <Pressable onPress={() => img && onOpen({uri: img.uri, ref: file, data: img.data})}>
+    <Pressable
+      onPress={() => onTap(() => img && onOpen({uri: img.uri, ref: file}))}
+      onLongPress={onLongPress}
+      delayLongPress={300}>
       {img ? (
         <Image source={{uri: img.uri}} style={[styles.image, {aspectRatio: ratio}]} resizeMode="cover" />
       ) : (
@@ -686,25 +784,43 @@ function ImageAttachment({
   );
 }
 
-function FileAttachment({roomKey, file, color, styles}: {roomKey: string; file: FileRef; color: string; styles: Styles}) {
+function FileAttachment({
+  roomKey,
+  file,
+  color,
+  styles,
+  onTap,
+  onLongPress,
+}: {
+  roomKey: string;
+  file: FileRef;
+  color: string;
+  styles: Styles;
+  /** The message's tap handler: runs `single` unless it turns into a double-tap (a reaction). */
+  onTap: (single?: () => void) => void;
+  onLongPress: () => void;
+}) {
   const [status, setStatus] = useState<string | null>(null);
+  const save = async () => {
+    try {
+      // The save dialog opens first; downloading and decrypting start
+      // once a location is picked.
+      const saved = await saveFileAs(file.name, file.mime, () => {
+        setStatus('Downloading…');
+        return fetchFile(roomKey, file);
+      });
+      setStatus(saved ? `Saved as ${saved.name}` : null);
+    } catch (e) {
+      setStatus(`Couldn't save: ${(e as Error).message}`);
+    }
+  };
   return (
     <Pressable
       style={styles.fileChip}
       disabled={status === 'Downloading…'}
-      onPress={async () => {
-        try {
-          // The save dialog opens first; downloading and decrypting start
-          // once a location is picked.
-          const saved = await saveFileAs(file.name, file.mime, () => {
-            setStatus('Downloading…');
-            return fetchFile(roomKey, file);
-          });
-          setStatus(saved ? `Saved as ${saved.name}` : null);
-        } catch (e) {
-          setStatus(`Couldn't save: ${(e as Error).message}`);
-        }
-      }}>
+      onPress={() => onTap(save)}
+      onLongPress={onLongPress}
+      delayLongPress={300}>
       <Icon name="file" size={18} color={color} />
       <View style={styles.fileChipText}>
         <Text style={[styles.fileName, {color}]} numberOfLines={1}>
@@ -785,18 +901,31 @@ function makeStyles(theme: Theme) {
     fileChipText: {flexShrink: 1},
     fileName: {fontSize: 13, fontWeight: '600'},
     fileMeta: {fontSize: 11, opacity: 0.75},
-    reactions: {flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 3},
-    reactionsMine: {justifyContent: 'flex-end'},
-    reactionChip: {
-      paddingHorizontal: 6,
+    // The bubble and the reaction pill pinned to its corner.
+    bubbleWrap: {position: 'relative'},
+    bubbleWrapReacted: {marginBottom: 14},
+    reactPill: {
+      position: 'absolute',
+      bottom: -14,
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 5,
       paddingVertical: 2,
-      borderRadius: 10,
-      backgroundColor: theme.surfaceAlt,
+      borderRadius: 12,
+      backgroundColor: theme.surface,
       borderWidth: 1,
       borderColor: theme.border,
     },
-    reactionChipMine: {borderColor: theme.primary},
-    reactionText: {fontSize: 12, color: theme.text},
+    // On the inner corner: toward the middle of the screen.
+    reactPillMine: {left: -6},
+    reactPillTheirs: {right: -6},
+    reactPillOwn: {borderColor: theme.primary},
+    reactPillEmoji: {fontSize: 13},
+    reactPillEmojiStacked: {marginLeft: -4},
+    reactPillCount: {fontSize: 11, fontWeight: '700', color: theme.textMuted, marginLeft: 3},
+    whoRow: {flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10},
+    whoEmoji: {fontSize: 20},
+    whoNames: {flex: 1, fontSize: 14, color: theme.text},
     seen: {fontSize: 10, color: theme.textMuted, marginTop: 2},
     typingRow: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingBottom: 6},
     typingText: {fontSize: 11, color: theme.textMuted, fontStyle: 'italic'},

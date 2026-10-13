@@ -1,5 +1,5 @@
 // New-message notifications, styled the way super-badger styles its alerts:
-// the small bubble icon tinted with the room's color, one notification per
+// the small icon tinted with the app theme's color, one notification per
 // room that the newest message replaces. Messages are decrypted on the
 // phone before this ever sees them; nothing goes through a push service.
 import notifee, {AndroidStyle} from '@notifee/react-native';
@@ -11,11 +11,10 @@ import type {ChatMessage, Room} from '../store';
 import {THEMES} from '../theme';
 import {CH_MESSAGES, ensureChannels, PREFER_SMALL_ICON, PRESS_ACTION} from './channels';
 
-// The tint for the status-bar icon and the notification's accent: the room's
-// color when it has one, else the app theme's accent (the same color the
-// themed launcher icon is drawn in).
-export async function notificationColor(roomColor?: string | null): Promise<string> {
-  if (roomColor) return roomColor;
+// The tint for the status-bar icon and the notification's accent: always the
+// app theme's accent (the color the themed launcher icon is drawn in), never
+// a room's color, so every Super Chat notification looks the same.
+export async function notificationColor(): Promise<string> {
   const {themeName} = await settingsStore.load();
   return rgbToHex(themeAccent(THEMES[themeName] ?? THEMES.dark));
 }
@@ -63,7 +62,7 @@ export async function notifyMessage(room: Room, msg: ChatMessage): Promise<void>
   const android = {
     channelId: CH_MESSAGES,
     smallIcon: 'ic_notification',
-    color: await notificationColor(room.view?.color),
+    color: await notificationColor(),
     pressAction: PRESS_ACTION,
     timestamp: msg.createdAt,
     showTimestamp: true,

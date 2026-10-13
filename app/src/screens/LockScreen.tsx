@@ -1,4 +1,4 @@
-import React, {useCallback, useEffect, useMemo, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Pressable, ScrollView, Text, View} from 'react-native';
 
 import {Icon} from '../components/Icon';
@@ -7,6 +7,17 @@ import {splashHold} from '../logo/splashHold';
 import {LogoArt} from '../logo/LogoArt';
 import {useTheme} from '../theme';
 import {makeStyles, PassphraseForm} from './OnboardingScreen';
+
+/** Longest a fingerprint/PIN unlock may take before the screen gives up on it. */
+const UNLOCK_TIMEOUT_MS = 45_000;
+
+/** Keystore failures arrive as Java exception text; say something a person can act on. */
+function friendlyError(e: Error): string {
+  const m = e.message || '';
+  if (/cancel/i.test(m)) return 'Unlock cancelled.';
+  if (/javax|keystore|wrapped|cipher/i.test(m)) return "Couldn't unlock with your fingerprint or PIN. Tap Unlock to try again.";
+  return m || 'Could not unlock.';
+}
 
 /**
  * Shown when the key is stored but not unlocked. On Android it asks for
@@ -25,24 +36,40 @@ export function LockScreen({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Each attempt's number: a late answer from an attempt that already timed
+  // out may still unlock, but mustn't overwrite a newer attempt's state.
+  const attempt = useRef(0);
   const unlock = useCallback(
     async (pass?: string) => {
+      const mine = ++attempt.current;
       setBusy(true);
       setError(null);
+      // The Keystore call has been seen to never answer; don't leave the
+      // buttons disabled forever waiting for it.
+      const timer = setTimeout(() => {
+        if (attempt.current !== mine) return;
+        attempt.current++;
+        splashHold.release();
+        setBusy(false);
+        setError("Unlock didn't respond. Tap Unlock to try again.");
+      }, UNLOCK_TIMEOUT_MS);
       try {
         const entropy = await loadIdentity(pass);
         if (entropy) {
           onUnlock(entropy);
           return;
         }
+        if (attempt.current !== mine) return;
         if (!NEEDS_PASSPHRASE) setError('Unlock cancelled.');
         // The lock screen has something to say: stop showing the splash over it.
         splashHold.release();
       } catch (e) {
+        if (attempt.current !== mine) return;
         splashHold.release();
-        setError((e as Error).message || 'Could not unlock.');
+        setError(friendlyError(e as Error));
       } finally {
-        setBusy(false);
+        clearTimeout(timer);
+        if (attempt.current === mine) setBusy(false);
       }
     },
     [onUnlock],

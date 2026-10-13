@@ -75,3 +75,6 @@ async function trim(): Promise<void> {
 export async function removeSealed(blobs: string[]): Promise<void> {
   await Promise.all(blobs.map(b => RNFS.unlink(pathOf(b)).catch(() => {})));
 }
+
+/** Native code (BlobModule.kt) cached a blob in this folder: keep the size cap. */
+export const noteCached = (): void => trimSoon();

@@ -8,9 +8,11 @@
 // to our encrypted vault on each server (see saveVaultSoon).
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useEffect, useReducer, useRef} from 'react';
+import {NativeModules, Platform} from 'react-native';
+import {base64} from '@scure/base';
 
-import {api, ApiError, downloadBlob, uploadBlob} from './api';
-import {clearSealed, getSealed, putSealed, removeSealed} from './blobDisk';
+import {api, ApiError, blobRequest, downloadBlob, uploadBlob} from './api';
+import {clearSealed, getSealed, noteCached, putSealed, removeSealed} from './blobDisk';
 import {dataUri} from './files';
 import {
   applyEvent,
@@ -480,6 +482,24 @@ async function prefetchLatest(r: Room) {
   if (r.messages.length) return;
   const page = await api.messages(r.server, r.id, r.me, {limit: 20});
   await ingestPage(r, page);
+}
+
+/**
+ * Pull-to-refresh on the room list: brings every room up to date (new rooms
+ * from the vault, then each room's messages since the newest one held).
+ */
+export async function refreshAll(): Promise<void> {
+  await refreshRooms().catch(() => {});
+  await Promise.all(
+    [...rooms.values()].map(async r => {
+      if (!r.log || r.loading) return;
+      const newest = r.messages.filter(m => !m.pending).slice(-1)[0];
+      if (!newest) return prefetchLatest(r).catch(() => {});
+      const page = await api.messages(r.server, r.id, r.me, {after: newest.pos, limit: 200}).catch(() => []);
+      await ingestPage(r, page);
+    }),
+  );
+  emit();
 }
 
 export async function openRoom(key: string): Promise<void> {
@@ -1016,39 +1036,66 @@ export async function fetchFile(key: string, ref: FileRef): Promise<Uint8Array> 
   return data;
 }
 
-// Keep recent images decrypted in memory only (never on disk), least recently
-// used out first, with the data: URI each one is shown through, so a row that
-// scrolls back into view shows its image at once instead of re-encoding it.
-const uriCache = new Map<string, string>();
+// Keep recent files decrypted in memory only (never on disk), least recently
+// used out first.
 function remember(blob: string, data: Uint8Array) {
   blobCache.delete(blob);
   blobCache.set(blob, data);
-  while (blobCache.size > 48) {
-    const oldest = blobCache.keys().next().value!;
-    blobCache.delete(oldest);
-    uriCache.delete(oldest);
-  }
+  while (blobCache.size > 24) blobCache.delete(blobCache.keys().next().value!);
+}
+
+// And the data: URIs images are shown through, so a row that scrolls back
+// into view (or an avatar that repeats) shows at once, with no work at all.
+const uriCache = new Map<string, string>();
+function rememberUri(blob: string, uri: string) {
+  uriCache.delete(blob);
+  uriCache.set(blob, uri);
+  while (uriCache.size > 48) uriCache.delete(uriCache.keys().next().value!);
 }
 
 export interface ShownImage {
   uri: string;
-  data: Uint8Array;
 }
 
-/** An image already decrypted in memory, synchronously; null if it needs loading. */
+/** An image ready in memory, synchronously; null if it needs loading. */
 export function peekImage(ref: FileRef): ShownImage | null {
-  const data = blobCache.get(ref.blob);
-  if (!data) return null;
   let uri = uriCache.get(ref.blob);
   if (!uri) {
+    const data = blobCache.get(ref.blob);
+    if (!data) return null;
     uri = dataUri(ref.mime, data);
-    uriCache.set(ref.blob, uri);
   }
-  return {uri, data};
+  rememberUri(ref.blob, uri);
+  return {uri};
 }
 
-/** An image ready to show: from memory, the device cache, or the server. */
+interface BlobNative {
+  open(blob: string, url: string, headers: Record<string, string>, key: string, mime: string): Promise<string>;
+}
+const NativeBlob = Platform.OS === 'android' ? (NativeModules.Blob as BlobNative | undefined) : undefined;
+
+/**
+ * An image ready to show: from memory, or else loaded from the device cache
+ * or the server. On Android that whole load (download, decrypt, encode) runs
+ * natively off the JS thread (BlobModule.kt), so taps never wait on it; the
+ * JS path is the fallback (older Android, the browser).
+ */
 export async function loadImage(key: string, ref: FileRef): Promise<ShownImage> {
+  const ready = peekImage(ref);
+  if (ready) return ready;
+  const r = rooms.get(key);
+  if (!r) throw new Error('room not loaded');
+  if (NativeBlob) {
+    const req = blobRequest(r.server, r.id, r.me, ref.blob);
+    try {
+      const uri = await NativeBlob.open(ref.blob, req.url, req.headers, base64.encode(unb64(ref.key)), ref.mime);
+      rememberUri(ref.blob, uri);
+      noteCached();
+      return {uri};
+    } catch (e) {
+      if ((e as {code?: string}).code !== 'E_UNSUPPORTED') throw e;
+    }
+  }
   await fetchFile(key, ref);
   return peekImage(ref)!;
 }

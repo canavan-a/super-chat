@@ -89,6 +89,12 @@ export async function uploadBlob(
   return JSON.parse(typeof res.data === 'string' ? res.data : '{}').id;
 }
 
+/** The signed GET for a blob, for native code to send itself (see BlobModule.kt). Sign it just before use: the server rejects stale timestamps. */
+export function blobRequest(server: string, room: string, by: Signer, blob: string): {url: string; headers: Record<string, string>} {
+  const path = `/v1/rooms/${room}/blobs/${blob}`;
+  return {url: server + path, headers: signedHeaders(by, 'GET', path, new Uint8Array())};
+}
+
 export async function downloadBlob(server: string, room: string, by: Signer, blob: string): Promise<Uint8Array> {
   const res = await xhr(server, 'GET', `/v1/rooms/${room}/blobs/${blob}`, by);
   if (res.status !== 200) throw new ApiError(res.status, 'download failed');

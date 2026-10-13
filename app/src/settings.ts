@@ -6,6 +6,9 @@ export const DEFAULT_SERVER = 'https://chat.superbadger.io';
 
 const STORAGE_KEY = 'superchat.settings.v1';
 
+/** The quick reactions: the long-press menu, and the choices for double-tap. */
+export const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
+
 export interface Settings {
   // Where new rooms are created. Joining follows the invite link's server.
   defaultServer: string;
@@ -41,6 +44,8 @@ export interface Settings {
   splashAutoDisabled: boolean;
   // The room last open, reopened on launch.
   lastRoom: string | null;
+  // What double-tapping a message reacts with (one of QUICK_REACTIONS).
+  doubleTapReaction: string;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -51,6 +56,7 @@ const DEFAULT_SETTINGS: Settings = {
   bgNotifications: false,
   notifPreviews: true,
   previewsDefaultOn: true,
+  doubleTapReaction: '❤️',
   lockAfterMin: 1,
   themedIcon: true,
   launchSplash: true,

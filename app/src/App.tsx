@@ -56,6 +56,8 @@ export interface HeaderInfo {
   accentColor?: string;
   subtitle?: string;
   actions?: {label: string; onPress: () => void; destructive?: boolean; icon?: IconName}[];
+  /** Tapping the title area (a room's header opens its controls). */
+  onPress?: () => void;
 }
 
 type Gate = 'loading' | 'onboard' | 'locked' | 'ready';
@@ -263,28 +265,59 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
     return () => sub.remove();
   }, [route, goBack]);
 
-  // Edge swipe from the right steps to the previous room in the list,
-  // exactly like super-badger's station cycling.
+  // Two swipes in a room. Finger to the right, anywhere: the chat slides off
+  // with it, the room list showing underneath, and past a third of the
+  // screen (or flicked) it goes back to the list. Finger to the left from
+  // the right edge: the previous room, like super-badger's station cycling.
   const screenWidth = Dimensions.get('window').width;
   const swipeX = useRef(new Animated.Value(0)).current;
   const swipeAnimating = useRef(false);
+  const swipeMode = useRef<'back' | 'prev' | null>(null);
+  const [peekList, setPeekList] = useState(false);
   const EDGE_ZONE = 28;
   const SWIPE_THRESHOLD = 70;
   const currentIndex = route.name === 'room' ? rooms.findIndex(r => r.key === route.key) : -1;
-  const canSwipe = route.name === 'room' && currentIndex >= 0 && rooms.length > 1;
+  const inRoom = route.name === 'room';
+  const canSwipe = inRoom && currentIndex >= 0 && rooms.length > 1;
   const panResponder = useMemo(
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: evt =>
           canSwipe && !swipeAnimating.current && evt.nativeEvent.pageX > screenWidth - EDGE_ZONE,
-        onMoveShouldSetPanResponder: (evt, g) =>
-          canSwipe &&
-          !swipeAnimating.current &&
-          evt.nativeEvent.pageX > screenWidth - EDGE_ZONE &&
-          g.dx < -5 &&
-          Math.abs(g.dx) > Math.abs(g.dy) * 2,
-        onPanResponderMove: (_e, g) => swipeX.setValue(Math.min(0, g.dx)),
+        // Capture, so a clearly sideways drag wins over the chat's own
+        // (vertical) scrolling and the message rows.
+        onMoveShouldSetPanResponderCapture: (evt, g) => {
+          if (!inRoom || swipeAnimating.current) return false;
+          if (g.dx > 14 && g.dx > Math.abs(g.dy) * 2.5) {
+            swipeMode.current = 'back';
+            setPeekList(true);
+            return true;
+          }
+          if (canSwipe && evt.nativeEvent.pageX > screenWidth - EDGE_ZONE && g.dx < -5 && Math.abs(g.dx) > Math.abs(g.dy) * 2) {
+            swipeMode.current = 'prev';
+            return true;
+          }
+          return false;
+        },
+        onPanResponderMove: (_e, g) =>
+          swipeX.setValue(swipeMode.current === 'back' ? Math.max(0, g.dx) : Math.min(0, g.dx)),
         onPanResponderRelease: (_e, g) => {
+          if (swipeMode.current === 'back') {
+            swipeMode.current = null;
+            if (g.dx > screenWidth / 3 || g.vx > 0.6) {
+              swipeAnimating.current = true;
+              Animated.timing(swipeX, {toValue: screenWidth, duration: 160, useNativeDriver: true}).start(() => {
+                navigate({name: 'home'});
+                swipeX.setValue(0);
+                setPeekList(false);
+                swipeAnimating.current = false;
+              });
+            } else {
+              Animated.spring(swipeX, {toValue: 0, useNativeDriver: true, bounciness: 4}).start(() => setPeekList(false));
+            }
+            return;
+          }
+          swipeMode.current = null;
           if (g.dx < -SWIPE_THRESHOLD) {
             swipeAnimating.current = true;
             Animated.timing(swipeX, {toValue: -screenWidth, duration: 180, useNativeDriver: true}).start(({finished}) => {
@@ -303,11 +336,14 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
             Animated.spring(swipeX, {toValue: 0, useNativeDriver: true, bounciness: 6}).start();
           }
         },
-        onPanResponderTerminate: () => Animated.spring(swipeX, {toValue: 0, useNativeDriver: true}).start(),
+        onPanResponderTerminate: () => {
+          swipeMode.current = null;
+          Animated.spring(swipeX, {toValue: 0, useNativeDriver: true}).start(() => setPeekList(false));
+        },
         onPanResponderTerminationRequest: () => false,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [canSwipe, currentIndex, rooms, screenWidth],
+    [inRoom, canSwipe, currentIndex, rooms, screenWidth],
   );
 
   const showingRoomHeader = (route.name === 'room' || route.name === 'roomSettings') && headerInfo;
@@ -334,21 +370,29 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
             <Icon name="chevron-left" size={22} color={theme.text} />
           </Pressable>
         )}
-        <View style={styles.headerTextArea}>
+        <Pressable
+          style={({pressed}) => [styles.headerTextArea, pressed && showingRoomHeader && headerInfo!.onPress && styles.headerPressed]}
+          disabled={!(showingRoomHeader && headerInfo!.onPress)}
+          onPress={() => headerInfo?.onPress?.()}
+          accessibilityRole={showingRoomHeader && headerInfo!.onPress ? 'button' : undefined}
+          accessibilityHint={showingRoomHeader && headerInfo!.onPress ? 'Opens the room controls' : undefined}>
           {route.name === 'home' ? (
             // The app's own lettering, on one line, rather than plain text.
             <LogoLine height={22} />
           ) : (
-            <Text style={styles.headerTitle} numberOfLines={1}>
-              {showingRoomHeader ? headerInfo!.title : TITLES[route.name]}
-            </Text>
+            <View style={styles.headerTitleRow}>
+              <Text style={styles.headerTitle} numberOfLines={1}>
+                {showingRoomHeader ? headerInfo!.title : TITLES[route.name]}
+              </Text>
+              {showingRoomHeader && headerInfo!.onPress ? <Icon name="chevron-right" size={16} color={theme.textMuted} /> : null}
+            </View>
           )}
           {showingRoomHeader && headerInfo!.subtitle ? (
             <Text style={styles.headerSubtitle} numberOfLines={1}>
               {headerInfo!.subtitle}
             </Text>
           ) : null}
-        </View>
+        </Pressable>
         {showingRoomHeader && headerInfo!.actions ? (
           <View style={styles.headerActions}>
             {headerInfo!.actions.map(a =>
@@ -371,19 +415,29 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
         )}
       </View>
 
-      <Animated.View style={[styles.body, {transform: [{translateX: swipeX}]}]} {...panResponder.panHandlers}>
-        {route.name === 'home' && <RoomListScreen rooms={rooms} loading={!ready} onNavigate={navigate} />}
-        {route.name === 'room' && (
-          // Keyed so switching rooms fully remounts the chat.
-          <RoomScreen key={route.key} roomKey={route.key} onNavigate={navigate} onHeaderChange={setHeaderInfo} />
+      <View style={styles.bodyArea}>
+        {peekList && (
+          // The list the back-swipe returns to, revealed as the chat slides off.
+          <View style={StyleSheet.absoluteFill} pointerEvents="none">
+            <RoomListScreen rooms={rooms} loading={!ready} onNavigate={navigate} />
+          </View>
         )}
-        {route.name === 'roomSettings' && (
-          <RoomSettingsScreen key={route.key} roomKey={route.key} onNavigate={navigate} onHeaderChange={setHeaderInfo} />
-        )}
-        {route.name === 'newRoom' && <NewRoomScreen onNavigate={navigate} />}
-        {route.name === 'join' && <JoinScreen key={route.link ?? ''} link={route.link} onNavigate={navigate} />}
-        {route.name === 'settings' && <SettingsScreen onForgotten={onForgotten} />}
-      </Animated.View>
+        <Animated.View
+          style={[styles.body, peekList && styles.bodyLifted, {transform: [{translateX: swipeX}]}]}
+          {...panResponder.panHandlers}>
+          {route.name === 'home' && <RoomListScreen rooms={rooms} loading={!ready} onNavigate={navigate} />}
+          {route.name === 'room' && (
+            // Keyed so switching rooms fully remounts the chat.
+            <RoomScreen key={route.key} roomKey={route.key} onNavigate={navigate} onHeaderChange={setHeaderInfo} />
+          )}
+          {route.name === 'roomSettings' && (
+            <RoomSettingsScreen key={route.key} roomKey={route.key} onNavigate={navigate} onHeaderChange={setHeaderInfo} />
+          )}
+          {route.name === 'newRoom' && <NewRoomScreen onNavigate={navigate} />}
+          {route.name === 'join' && <JoinScreen key={route.link ?? ''} link={route.link} onNavigate={navigate} />}
+          {route.name === 'settings' && <SettingsScreen onForgotten={onForgotten} />}
+        </Animated.View>
+      </View>
     </SafeAreaView>
   );
 }
@@ -412,7 +466,9 @@ function makeStyles(theme: Theme) {
       borderBottomColor: theme.border,
     },
     headerBack: {width: 36, height: 36, alignItems: 'center', justifyContent: 'center', marginRight: 4, marginLeft: -6},
-    headerTextArea: {flex: 1, minWidth: 0},
+    headerTextArea: {flex: 1, minWidth: 0, borderRadius: 6},
+    headerPressed: {opacity: 0.6},
+    headerTitleRow: {flexDirection: 'row', alignItems: 'center', gap: 2},
     headerTitle: {fontSize: 16, fontWeight: '700', color: theme.text, flexShrink: 1},
     headerSubtitle: {fontSize: 11, color: theme.textMuted, marginTop: 1},
     headerActions: {flexDirection: 'row', gap: 6},
@@ -420,7 +476,16 @@ function makeStyles(theme: Theme) {
     headerActionText: {fontSize: 12, fontWeight: '600', color: theme.text},
     headerActionDestructive: {color: theme.danger},
     headerIconButton: {width: 32, height: 32, alignItems: 'center', justifyContent: 'center'},
-    body: {flex: 1},
+    bodyArea: {flex: 1},
+    body: {flex: 1, backgroundColor: theme.bg},
+    // While a back-swipe shows the list underneath: a soft edge shadow.
+    bodyLifted: {
+      elevation: 12,
+      shadowColor: '#000',
+      shadowOpacity: 0.3,
+      shadowRadius: 10,
+      shadowOffset: {width: -4, height: 0},
+    },
   });
 }
 
