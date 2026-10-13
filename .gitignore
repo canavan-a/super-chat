@@ -1,0 +1,5 @@
+.data/
+server/tmp/
+server/*.db
+*.apk
+.DS_Store
