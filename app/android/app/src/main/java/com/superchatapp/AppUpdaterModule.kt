@@ -1,13 +1,10 @@
 package com.superchatapp
 
 import android.app.DownloadManager
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
-import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -79,64 +76,18 @@ class AppUpdaterModule(private val reactCtx: ReactApplicationContext) :
     }
   }
 
+  /**
+   * Starts downloading [url] in the background and resolves at once. The
+   * system shows the progress notification; when it's done UpdateInstaller
+   * opens the installer (or offers it), whether or not the app is still open.
+   * Progress events still flow to JS while the app is.
+   */
   @ReactMethod
-  fun downloadApk(url: String, versionLabel: String, promise: Promise) {
+  fun startUpdate(url: String, versionLabel: String, promise: Promise) {
     try {
-      val fileName = "superchat-$versionLabel.apk"
-      // Clear any stale copy so the installer never picks up a half-written file.
-      File(reactCtx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), fileName).delete()
-
-      val req =
-          DownloadManager.Request(Uri.parse(url))
-              .setTitle("Super Chat $versionLabel")
-              .setDescription("Downloading update")
-              .setMimeType("application/vnd.android.package-archive")
-              .setNotificationVisibility(
-                  DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-              .setDestinationInExternalFilesDir(
-                  reactCtx, Environment.DIRECTORY_DOWNLOADS, fileName)
-
-      val id = dm.enqueue(req)
+      val id = UpdateInstaller.start(reactCtx, url, versionLabel)
       trackProgress(id)
-
-      val receiver =
-          object : BroadcastReceiver() {
-            override fun onReceive(c: Context, i: Intent) {
-              val done = i.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
-              if (done != id) return
-              try {
-                reactCtx.unregisterReceiver(this)
-              } catch (_: Exception) {}
-
-              val q = DownloadManager.Query().setFilterById(id)
-              dm.query(q).use { cur ->
-                if (cur == null || !cur.moveToFirst()) {
-                  promise.reject("download_failed", "download row missing")
-                  return
-                }
-                val status =
-                    cur.getInt(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                if (status == DownloadManager.STATUS_SUCCESSFUL) {
-                  val local =
-                      File(
-                              reactCtx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS),
-                              fileName)
-                          .absolutePath
-                  promise.resolve(local)
-                } else {
-                  val reason =
-                      cur.getInt(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
-                  promise.reject("download_failed", "status=$status reason=$reason")
-                }
-              }
-            }
-          }
-      val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        reactCtx.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
-      } else {
-        @Suppress("UnspecifiedRegisterReceiverFlag") reactCtx.registerReceiver(receiver, filter)
-      }
+      promise.resolve(null)
     } catch (e: Exception) {
       promise.reject("download_failed", e)
     }

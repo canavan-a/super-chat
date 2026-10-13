@@ -50,6 +50,23 @@ const LOCK_OPTIONS = [
   {min: 30, label: '30 min'},
 ];
 
+
+/** Rejects if `p` hasn't settled in 10 s: some platform calls have been seen never to answer. */
+function withTimeout<T>(p: Promise<T>, what: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`Timed out ${what}. Please try again.`)), 10_000);
+    p.then(
+      v => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      e => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
 export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
   const {theme, themeName, setThemeName} = useThemeSetting();
   const styles = makeStyles(theme);
@@ -91,13 +108,21 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A download runs in the background whatever this screen does; while it's
+  // open it shows the percentage too.
+  const [downloading, setDownloading] = useState(false);
   useEffect(() => {
-    if (!updateBusy) return;
+    if (!downloading) return;
     return onDownloadProgress(({bytesDownloaded, bytesTotal}) => {
       const pct = bytesTotal > 0 ? Math.round((bytesDownloaded / bytesTotal) * 100) : 0;
-      setUpdateStatus(`Downloading… ${pct}%`);
+      if (bytesTotal > 0 && bytesDownloaded >= bytesTotal) {
+        setUpdateStatus('Downloaded. Opening the installer…');
+        setDownloading(false);
+      } else {
+        setUpdateStatus(`Downloading in the background… ${pct}%. You can leave this screen.`);
+      }
     });
-  }, [updateBusy]);
+  }, [downloading]);
 
   const currentVersionName = version?.split(' ')[0];
   const latestRelease = releases[0];
@@ -123,7 +148,10 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
     setUpdateStatus('Starting…');
     try {
       await runUpdate(target);
-      setUpdateStatus('Opening installer…');
+      setDownloading(true);
+      setUpdateStatus(
+        "Downloading in the background. Watch the notification; the installer opens when it's done, even if you leave the app.",
+      );
     } catch (e) {
       if (e instanceof DowngradeBlockedError) {
         Alert.alert('Downgrade blocked', 'Uninstall the app first to install an older version.');
@@ -139,20 +167,34 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
   // ---- notifications (Android) ----
   const [bgBusy, setBgBusy] = useState(false);
   const [permStatus, setPermStatus] = useState<string>();
+  // The switch flips at once and the service is started or stopped behind
+  // it, within a time limit: it used to wait on that with the switch
+  // disabled, and a call that never answered left it stuck for good.
   const toggleBg = async (value: boolean) => {
+    if (bgBusy) return;
     setBgBusy(true);
+    await settingsStore.update({bgNotifications: value});
     try {
       const notifee = (await import('@notifee/react-native')).default;
       const {startMonitoring, stopMonitoring} = await import('../service/BackgroundMonitorService');
       if (value) {
-        await notifee.requestPermission();
-        await startMonitoring();
+        const {AuthorizationStatus} = await import('@notifee/react-native');
+        const perm = await withTimeout(notifee.requestPermission(), 'asking for notification permission');
+        if (perm.authorizationStatus !== AuthorizationStatus.AUTHORIZED) {
+          throw new Error('Notifications are turned off for Super Chat. Turn them on in system settings, then try again.');
+        }
+        await withTimeout(startMonitoring(), 'starting the background connection');
       } else {
-        await stopMonitoring();
+        await withTimeout(stopMonitoring(), 'stopping the background connection');
       }
-      await settingsStore.update({bgNotifications: value});
     } catch (err) {
-      Alert.alert('Background notifications', String(err));
+      // Turning it on failed: back off. Turning it off always sticks (the
+      // service is gone or going either way).
+      if (value) await settingsStore.update({bgNotifications: false});
+      Alert.alert('Background notifications', (err as Error).message || String(err), [
+        {text: 'Open settings', onPress: () => Linking.openSettings()},
+        {text: 'OK', style: 'cancel'},
+      ]);
     } finally {
       setBgBusy(false);
     }
@@ -170,12 +212,37 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
       ]);
     }
   };
+  // Says what happened instead of failing silently: a blocked permission or
+  // channel is the usual reason nothing appears.
   const sendTest = async () => {
+    const fix = (msg: string, open: () => void) =>
+      Alert.alert('Test notification', msg, [
+        {text: 'Open settings', onPress: open},
+        {text: 'OK', style: 'cancel'},
+      ]);
     try {
+      const notifee = (await import('@notifee/react-native')).default;
+      const {AuthorizationStatus} = await import('@notifee/react-native');
+      const {CH_MESSAGES} = await import('../notifications/channels');
       const {sendTestNotification} = await import('../notifications/messages');
-      await sendTestNotification();
+      const perm = await withTimeout(notifee.requestPermission(), 'asking for notification permission');
+      if (perm.authorizationStatus !== AuthorizationStatus.AUTHORIZED) {
+        setPermStatus('Denied');
+        return fix('Notifications are turned off for Super Chat.', () => Linking.openSettings());
+      }
+      await withTimeout(sendTestNotification(), 'sending the test');
+      if (await notifee.isChannelBlocked(CH_MESSAGES)) {
+        return fix('The "Messages" notification category is turned off for Super Chat.', () =>
+          notifee.openNotificationSettings(CH_MESSAGES),
+        );
+      }
+      const shown = (await notifee.getDisplayedNotifications()).some(n => n.id === 'superchat-test');
+      Alert.alert(
+        'Test notification',
+        shown ? 'Sent. Check your notification shade.' : "Sent, but Android didn't show it. Check Do Not Disturb and battery settings.",
+      );
     } catch (err) {
-      Alert.alert('Test notification', String(err));
+      Alert.alert('Test notification', (err as Error).message || String(err));
     }
   };
 

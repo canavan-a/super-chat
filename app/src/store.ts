@@ -372,6 +372,19 @@ async function loadKeys(r: Room): Promise<void> {
  * removed) is dropped.
  */
 export async function refreshRooms(): Promise<void> {
+  try {
+    await loadRooms();
+  } finally {
+    // Whatever went wrong, the list mustn't sit on "Loading" for ever: it
+    // shows what loaded (rooms with errors say so when opened).
+    if (!roomsLoaded) {
+      roomsLoaded = true;
+      emit();
+    }
+  }
+}
+
+async function loadRooms(): Promise<void> {
   const {servers} = await settingsStore.load();
   await loadMyAvatar();
   try {
@@ -380,7 +393,7 @@ export async function refreshRooms(): Promise<void> {
     lastRead = {};
   }
   const local = await loadLocalList();
-  await Promise.all(
+  const work = Promise.all(
     [...new Set([...servers, ...Object.keys(local)])].map(async server => {
       const fromVault = await readVault(server).catch(() => null);
       if (fromVault) vaultSaved.set(server, JSON.stringify([...fromVault].sort()));
@@ -390,9 +403,15 @@ export async function refreshRooms(): Promise<void> {
           const r = ensureRoom(server, id);
           try {
             await loadState(r);
-            await maybeRotate(r);
+            // Shown as soon as its own state is in, not when every room is.
+            emit();
+            // Not on the way to showing the list: rotation, the picture, and
+            // the newest messages for the preview carry on behind it.
+            maybeRotate(r).catch(() => {});
             syncAvatar(r).catch(() => {});
-            await prefetchLatest(r).catch(() => {});
+            prefetchLatest(r)
+              .then(emit)
+              .catch(() => {});
           } catch (e) {
             if (e instanceof ApiError && e.status === 404) rooms.delete(r.key);
             else r.error = String((e as Error).message ?? e);
@@ -403,11 +422,17 @@ export async function refreshRooms(): Promise<void> {
       if (fromVault && JSON.stringify(roomIdsOn(server)) !== vaultSaved.get(server)) saveVaultSoon(server);
       if (roomIdsOn(server).length) connect(server);
     }),
-  );
-  await saveLocalList();
+  ).then(() => saveLocalList());
+  // One slow or unreachable server mustn't hold the whole list: show what's
+  // ready after a few seconds, and let the rest arrive as it loads.
+  await Promise.race([work, new Promise(res => setTimeout(res, ROOMS_READY_WAIT_MS))]);
   roomsLoaded = true;
   emit();
+  work.then(emit).catch(() => {});
 }
+
+/** The longest the room list waits for slow servers before showing what it has. */
+const ROOMS_READY_WAIT_MS = 6000;
 
 function retentionCutoff(r: Room): number {
   const days = r.view?.retentionDays ?? 0;

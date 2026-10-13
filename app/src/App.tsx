@@ -18,6 +18,7 @@ import {
 } from 'react-native';
 
 import {useThemedAppIcon} from './appIcon';
+import {CrashScreen} from './components/CrashScreen';
 import {Icon, IconName} from './components/Icon';
 import {parseInviteLink} from './crypto';
 import {hasStoredIdentity, NEEDS_PASSPHRASE} from './keystore';
@@ -491,11 +492,13 @@ function makeStyles(theme: Theme) {
 
 function App(): React.JSX.Element {
   return (
-    <ThemeProvider>
-      <SplashGate>
-        <AccountGate />
-      </SplashGate>
-    </ThemeProvider>
+    <CrashScreen>
+      <ThemeProvider>
+        <SplashGate>
+          <AccountGate />
+        </SplashGate>
+      </ThemeProvider>
+    </CrashScreen>
   );
 }
 

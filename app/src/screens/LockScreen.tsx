@@ -1,5 +1,5 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {Pressable, ScrollView, Text, View} from 'react-native';
+import {Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 
 import {Icon} from '../components/Icon';
 import {loadIdentity, NEEDS_PASSPHRASE} from '../keystore';
@@ -95,9 +95,10 @@ export function LockScreen({
           onOk={unlock}
         />
       ) : (
-        <View style={styles.center}>
+        // Clear air between the wordmark and the lock, and no caption: the
+        // lock and the button say it.
+        <View style={[styles.center, local.lockArea]}>
           <Icon name="lock" size={28} color={theme.textMuted} />
-          <Text style={styles.body}>Super Chat is locked.</Text>
           <Pressable style={styles.primary} onPress={() => unlock()} disabled={busy}>
             <Text style={styles.primaryText}>Unlock</Text>
           </Pressable>
@@ -110,3 +111,7 @@ export function LockScreen({
     </ScrollView>
   );
 }
+
+const local = StyleSheet.create({
+  lockArea: {marginTop: 40, gap: 16},
+});

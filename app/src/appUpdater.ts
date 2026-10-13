@@ -17,7 +17,7 @@ interface AppUpdaterNative {
   getVersionInfo(): Promise<VersionInfo>;
   canInstallPackages(): Promise<boolean>;
   openInstallPermissionSettings(): Promise<void>;
-  downloadApk(url: string, versionLabel: string): Promise<string>;
+  startUpdate(url: string, versionLabel: string): Promise<void>;
   installApk(path: string): Promise<void>;
 }
 
@@ -122,22 +122,18 @@ export function compareVersions(a: string, b: string): number {
 
 export class DowngradeBlockedError extends Error {}
 
-// Orchestrates the update: permission gate -> download -> hand to installer.
-// Throws DowngradeBlockedError when the installer rejects a lower versionCode.
+// Starts the update: permission gate, then the download in the background,
+// and returns straight away. The rest happens natively (UpdateInstaller.kt):
+// a progress-bar notification while it downloads, then the installer opens
+// (on screen) or is offered by a notification (app in the background, or
+// closed) and opens on its own when the app comes back. Older versions are
+// refused before getting here (see SettingsScreen), since Android won't
+// replace a newer build.
 export async function runUpdate(release: Release): Promise<void> {
   const n = native();
   if (!(await n.canInstallPackages())) {
     await n.openInstallPermissionSettings();
     throw new Error('Grant "install unknown apps" permission, then try again.');
   }
-  const path = await n.downloadApk(release.apkUrl, release.version);
-  try {
-    await n.installApk(path);
-  } catch (e) {
-    const msg = String(e);
-    if (/downgrade/i.test(msg) || /INSTALL_FAILED_VERSION_DOWNGRADE/.test(msg)) {
-      throw new DowngradeBlockedError();
-    }
-    throw e;
-  }
+  await n.startUpdate(release.apkUrl, release.version);
 }

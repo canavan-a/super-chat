@@ -25,18 +25,38 @@ function signedHeaders(by: Signer, method: string, pathQuery: string, body: Uint
   };
 }
 
+/** How long an API call may take before it's given up on. */
+const REQUEST_TIMEOUT_MS = 15_000;
+/** Attachments can be large, and uploads slow: more time (XHR counts the whole transfer). */
+const DOWNLOAD_TIMEOUT_MS = 120_000;
+const UPLOAD_TIMEOUT_MS = 300_000;
+
 /** A request; signed when `by` is given. */
 export async function request<T>(server: string, method: string, path: string, by: Signer | null, body?: unknown): Promise<T> {
   const bytes = body === undefined ? new Uint8Array() : utf8(JSON.stringify(body));
-  const res = await fetch(server + path, {
-    method,
-    headers: {
-      ...(by ? signedHeaders(by, method, path, bytes) : {}),
-      ...(body !== undefined ? {'Content-Type': 'application/json'} : {}),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await res.text();
+  // A request that never answers (a dead connection, an unreachable server)
+  // fails after a while instead of holding everything waiting on it forever.
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), REQUEST_TIMEOUT_MS);
+  let res: Response;
+  let text: string;
+  try {
+    res = await fetch(server + path, {
+      method,
+      headers: {
+        ...(by ? signedHeaders(by, method, path, bytes) : {}),
+        ...(body !== undefined ? {'Content-Type': 'application/json'} : {}),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: abort.signal,
+    });
+    text = await res.text();
+  } catch (e) {
+    if (abort.signal.aborted) throw new ApiError(0, `${server.replace(/^https?:\/\//, '')} didn't answer`);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   let json: any = null;
   try {
     json = text ? JSON.parse(text) : null;
@@ -72,6 +92,8 @@ function xhr(
       target.onprogress = e => e.lengthComputable && onProgress(e.loaded / e.total);
     }
     req.onload = () => resolve({status: req.status, data: req.response});
+    req.timeout = method === 'PUT' ? UPLOAD_TIMEOUT_MS : DOWNLOAD_TIMEOUT_MS;
+    req.ontimeout = () => reject(new ApiError(0, 'timed out'));
     req.onerror = () => reject(new ApiError(0, 'network error'));
     req.send(body as any);
   });

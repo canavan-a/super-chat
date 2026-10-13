@@ -34,6 +34,13 @@
         android:exported="false"
         tools:replace="android:foregroundServiceType" />
 
+      <!-- An update download finishing, even with the app closed (UpdateInstaller.kt). -->
+      <receiver android:name=".UpdateDownloadReceiver" android:exported="true">
+        <intent-filter>
+          <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
+        </intent-filter>
+      </receiver>
+
       <!-- Serves the downloaded APK to the system package installer. -->
       <provider
         android:name="androidx.core.content.FileProvider"
