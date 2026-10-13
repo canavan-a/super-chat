@@ -16,7 +16,7 @@ import {
 
 import type {HeaderInfo} from '../App';
 import {FileRef, fingerprint} from '../crypto';
-import {dataUri, pickFiles, pickImages, PickedFile, saveFile} from '../files';
+import {dataUri, pickFiles, pickImages, PickedFile, saveFileAs} from '../files';
 import {Icon} from '../components/Icon';
 import {Overlay} from '../components/Overlay';
 import {MarkdownText} from '../components/Markdown';
@@ -62,6 +62,8 @@ export function RoomScreen({
   const [error, setError] = useState<string | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
   const [sending, setSending] = useState(false);
+  /** What an attachment upload is doing, shown above the composer. */
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const lastTyping = useRef(0);
 
   useEffect(() => {
@@ -136,16 +138,23 @@ export function RoomScreen({
       setError(`${tooBig.name} is over 24 MB.`);
       return;
     }
+    // The caption and reply go with the files; clear them now so the composer
+    // is free while the upload runs (and put them back if it fails).
+    const caption = draft.trim();
+    const reply = replyTo;
+    setDraft('');
+    setReplyTo(null);
     setSending(true);
     try {
-      await sendFiles(roomKey, files, draft.trim(), replyTo?.id);
-      setDraft('');
-      setReplyTo(null);
+      await sendFiles(roomKey, files, caption, reply?.id, setUploadStatus);
       setError(null);
     } catch (e) {
-      setError((e as Error).message);
+      setDraft(d => d || caption);
+      setReplyTo(r => r ?? reply);
+      setError(`Couldn't send: ${(e as Error).message}`);
     } finally {
       setSending(false);
+      setUploadStatus(null);
     }
   };
 
@@ -202,6 +211,15 @@ export function RoomScreen({
           <Pressable onPress={() => setReplyTo(null)} hitSlop={8}>
             <Icon name="close" size={16} color={theme.textMuted} />
           </Pressable>
+        </View>
+      )}
+
+      {uploadStatus && (
+        <View style={styles.uploadRow}>
+          <ActivityIndicator size="small" color={theme.textMuted} />
+          <Text style={styles.uploadText} numberOfLines={1}>
+            {uploadStatus}
+          </Text>
         </View>
       )}
 
@@ -282,7 +300,22 @@ function ChatList({
   const contentHeight = useRef(0);
   const [showJump, setShowJump] = useState(false);
   const [menuFor, setMenuFor] = useState<ChatMessage | null>(null);
-  const [viewer, setViewer] = useState<{uri: string; ref: FileRef; data: Uint8Array} | null>(null);
+  const [viewer, setViewerRaw] = useState<{uri: string; ref: FileRef; data: Uint8Array} | null>(null);
+  const [viewerSave, setViewerSave] = useState<'saving' | 'saved' | {error: string} | null>(null);
+  const setViewer = (v: typeof viewer) => {
+    setViewerSave(null);
+    setViewerRaw(v);
+  };
+  const saveViewed = async () => {
+    if (!viewer || viewerSave === 'saving') return;
+    setViewerSave('saving');
+    try {
+      const saved = await saveFileAs(viewer.ref.name, viewer.ref.mime, async () => viewer.data);
+      setViewerSave(saved ? 'saved' : null);
+    } catch (e) {
+      setViewerSave({error: (e as Error).message || "Couldn't save"});
+    }
+  };
   const loadingOlderRef = useRef(false);
 
   const messages = room.messages;
@@ -452,21 +485,20 @@ function ChatList({
         <View style={styles.viewerInner} pointerEvents="box-none">
           {viewer && <Image source={{uri: viewer.uri}} style={styles.viewerImage} resizeMode="contain" />}
           <View style={styles.viewerActions}>
-            <Pressable
-              style={styles.viewerButton}
-              onPress={async () => {
-                if (!viewer) return;
-                await saveFile(viewer.ref.name, viewer.data).catch(() => {});
-                setViewer(null);
-              }}>
-              <Icon name="download" size={18} color="#fff" />
-              <Text style={styles.viewerButtonText}>Save</Text>
+            <Pressable style={styles.viewerButton} onPress={saveViewed} disabled={viewerSave === 'saving'}>
+              {viewerSave === 'saving' ? <ActivityIndicator size="small" color="#fff" /> : <Icon name="download" size={18} color="#fff" />}
+              <Text style={styles.viewerButtonText}>
+                {viewerSave === 'saving' ? 'Saving…' : viewerSave === 'saved' ? 'Saved' : 'Save'}
+              </Text>
             </Pressable>
             <Pressable style={styles.viewerButton} onPress={() => setViewer(null)}>
               <Icon name="close" size={18} color="#fff" />
               <Text style={styles.viewerButtonText}>Close</Text>
             </Pressable>
           </View>
+          {viewerSave && typeof viewerSave === 'object' && (
+            <Text style={styles.viewerError}>Couldn't save: {viewerSave.error}</Text>
+          )}
         </View>
       </Overlay>
     </View>
@@ -607,11 +639,16 @@ function FileAttachment({roomKey, file, color, styles}: {roomKey: string; file: 
   return (
     <Pressable
       style={styles.fileChip}
+      disabled={status === 'Downloading…'}
       onPress={async () => {
-        setStatus('Decrypting…');
         try {
-          const saved = await saveFile(file.name, await fetchFile(roomKey, file));
-          setStatus(`Saved to ${saved.location} as ${saved.name}`);
+          // The save dialog opens first; downloading and decrypting start
+          // once a location is picked.
+          const saved = await saveFileAs(file.name, file.mime, () => {
+            setStatus('Downloading…');
+            return fetchFile(roomKey, file);
+          });
+          setStatus(saved ? `Saved as ${saved.name}` : null);
         } catch (e) {
           setStatus(`Couldn't save: ${(e as Error).message}`);
         }
@@ -704,6 +741,8 @@ function makeStyles(theme: Theme) {
     seen: {fontSize: 10, color: theme.textMuted, marginTop: 2},
     typingRow: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingBottom: 6},
     typingText: {fontSize: 11, color: theme.textMuted, fontStyle: 'italic'},
+    uploadRow: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 6},
+    uploadText: {flex: 1, fontSize: 12, color: theme.textMuted},
     replyBar: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -790,5 +829,6 @@ function makeStyles(theme: Theme) {
     viewerActions: {flexDirection: 'row', justifyContent: 'center', gap: 24, padding: 20},
     viewerButton: {flexDirection: 'row', alignItems: 'center', gap: 6, padding: 10},
     viewerButtonText: {color: '#fff', fontWeight: '700'},
+    viewerError: {color: '#ff9b9b', textAlign: 'center', paddingHorizontal: 20, paddingBottom: 16},
   });
 }

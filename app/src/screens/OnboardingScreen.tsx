@@ -121,7 +121,7 @@ export function OnboardingScreen({onDone}: {onDone: (entropy: Uint8Array) => voi
 
       {step.name === 'welcome' && (
         <View style={styles.center}>
-          <LogoArt width={300} />
+          <LogoArt height={220} />
           <Text style={styles.lead}>End-to-end encrypted rooms. No sign-up, no phone number, no email.</Text>
           <Text style={styles.body}>
             Your account is a key that lives on this device. Servers store only ciphertext and never learn who you
@@ -149,6 +149,7 @@ export function OnboardingScreen({onDone}: {onDone: (entropy: Uint8Array) => voi
           me={step.me}
           styles={styles}
           theme={theme}
+          busy={busy}
           onQuiz={ask => go({name: 'confirm', me: step.me, ask})}
           onSkipQuiz={() => store(step.me, step)}
         />
@@ -251,12 +252,15 @@ function ShowPhrase({
   me,
   styles,
   theme,
+  busy,
   onQuiz,
   onSkipQuiz,
 }: {
   me: Identity;
   styles: Styles;
   theme: Theme;
+  /** Set while the key is being stored after Continue. */
+  busy: string | null;
   onQuiz: (ask: number[]) => void;
   onSkipQuiz: () => void;
 }) {
@@ -341,7 +345,8 @@ function ShowPhrase({
       )}
 
       <Pressable
-        style={styles.primary}
+        style={[styles.primary, !!busy && styles.disabled]}
+        disabled={!!busy}
         onPress={() => {
           if (saved) {
             // The key file is a tested backup already; no quiz needed.
@@ -353,8 +358,13 @@ function ShowPhrase({
           while (picks.size < 3) picks.add(randomBytes(1)[0] % 24);
           onQuiz([...picks].sort((a, b) => a - b));
         }}>
-        <Text style={styles.primaryText}>{saved ? 'Continue' : "I've written them down"}</Text>
+        {busy ? (
+          <ActivityIndicator color={theme.primaryText} />
+        ) : (
+          <Text style={styles.primaryText}>{saved ? 'Continue' : "I've written them down"}</Text>
+        )}
       </Pressable>
+      {busy && <Notice kind="working" title={busy} />}
     </View>
   );
 }

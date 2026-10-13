@@ -96,11 +96,14 @@ describe('logo data', () => {
     });
   });
 
-  it('cuts the wordmark into 9 contiguous slices (S-u-p-e-r C-h-a-t), each holding only its own columns', () => {
+  it('cuts the stacked wordmark into 9 slices (S-u-p-e-r over C-h-a-t), contiguous per line, each holding only its own columns', () => {
     expect(LOGO.word.slices).toHaveLength(9);
+    const firstRow = (s: (typeof LOGO.word.slices)[number]) => Math.min(...s.tones.flatMap(t => t.runs.filter((_, k) => k % 3 === 1)));
     LOGO.word.slices.forEach((s, i) => {
       expect(s.x1).toBeGreaterThan(s.x0);
-      if (i > 0) expect(s.x0).toBe(LOGO.word.slices[i - 1].x1);
+      // "Chat" starts a new line at slice 5, below all of "Super".
+      if (i > 0 && i !== 5) expect(s.x0).toBe(LOGO.word.slices[i - 1].x1);
+      if (i >= 5) expect(firstRow(s)).toBeGreaterThan(Math.max(...LOGO.word.slices.slice(0, 5).map(firstRow)));
       for (const t of s.tones) {
         for (let k = 0; k < t.runs.length; k += 3) {
           expect(t.runs[k]).toBeGreaterThanOrEqual(s.x0);

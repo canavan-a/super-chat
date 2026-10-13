@@ -51,20 +51,40 @@ export async function request<T>(server: string, method: string, path: string, b
 
 // Binary transfers go through XMLHttpRequest: React Native's fetch can't
 // read a response as an ArrayBuffer, but its XHR can (responseType).
-function xhr(server: string, method: 'GET' | 'PUT', path: string, by: Signer, body?: Uint8Array): Promise<{status: number; data: any}> {
+function xhr(
+  server: string,
+  method: 'GET' | 'PUT',
+  path: string,
+  by: Signer,
+  body?: Uint8Array,
+  onProgress?: (fraction: number) => void,
+): Promise<{status: number; data: any}> {
   return new Promise((resolve, reject) => {
     const req = new XMLHttpRequest();
     req.open(method, server + path);
     for (const [k, v] of Object.entries(signedHeaders(by, method, path, body ?? new Uint8Array()))) req.setRequestHeader(k, v);
+    // Android's networking layer refuses a binary body without a content
+    // type (it fails as a bare "network error"); the server ignores it.
+    if (body) req.setRequestHeader('Content-Type', 'application/octet-stream');
     if (method === 'GET') req.responseType = 'arraybuffer';
+    if (onProgress) {
+      const target = method === 'PUT' ? req.upload : req;
+      target.onprogress = e => e.lengthComputable && onProgress(e.loaded / e.total);
+    }
     req.onload = () => resolve({status: req.status, data: req.response});
     req.onerror = () => reject(new ApiError(0, 'network error'));
     req.send(body as any);
   });
 }
 
-export async function uploadBlob(server: string, room: string, by: Signer, sealed: Uint8Array): Promise<string> {
-  const res = await xhr(server, 'PUT', `/v1/rooms/${room}/blobs`, by, sealed);
+export async function uploadBlob(
+  server: string,
+  room: string,
+  by: Signer,
+  sealed: Uint8Array,
+  onProgress?: (fraction: number) => void,
+): Promise<string> {
+  const res = await xhr(server, 'PUT', `/v1/rooms/${room}/blobs`, by, sealed, onProgress);
   if (res.status !== 201) throw new ApiError(res.status, 'upload failed');
   return JSON.parse(typeof res.data === 'string' ? res.data : '{}').id;
 }

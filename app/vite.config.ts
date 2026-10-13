@@ -85,5 +85,9 @@ export default defineConfig(({mode}) => ({
   define: {
     // react-native-web checks this at runtime.
     'process.env.NODE_ENV': JSON.stringify(mode === 'production' ? 'production' : 'development'),
+    // React Native's `global`, which react-native-web's Animated still calls
+    // (global.cancelAnimationFrame when an animation stops). Without it,
+    // stopping the typing dots threw and blanked the page.
+    global: 'globalThis',
   },
 }));

@@ -48,7 +48,7 @@ export function LockScreen({
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
       <View style={styles.center}>
-        <LogoArt width={260} />
+        <LogoArt height={190} />
       </View>
       {NEEDS_PASSPHRASE ? (
         <PassphraseForm

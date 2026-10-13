@@ -143,10 +143,10 @@ export const FullLogo = memo(function FullLogo({fill, width, height}: FullProps)
   );
 });
 
-/** The logo at rest, in the current theme's colors (onboarding, lock screen). */
-export function LogoArt({width}: {width: number}): React.JSX.Element {
+/** The logo at rest, in the current theme's colors (onboarding, lock screen). Sized by height: stacked, it's about twice as tall as wide. */
+export function LogoArt({height}: {height: number}): React.JSX.Element {
   const theme = useTheme();
-  const height = (width * LOGO_H) / LOGO_W;
+  const width = (height * LOGO_W) / LOGO_H;
   return (
     <View style={{width, height}} accessible accessibilityLabel="Super Chat">
       <FullLogo fill={t => toneColor(theme, t.u, t.w)} width={width} height={height} />

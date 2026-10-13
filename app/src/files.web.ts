@@ -44,12 +44,20 @@ export interface SavedFile {
   location: string;
 }
 
-// Browsers have no save dialog to open first; this just downloads.
+// Browsers have no save dialog to open first; these just download.
+export async function saveFileAs(
+  name: string,
+  _mime: string,
+  makeData: () => Promise<Uint8Array>,
+): Promise<SavedFile | null> {
+  return saveFile(name, await makeData());
+}
+
 export async function saveTextFileAs(name: string, makeText: () => Promise<string>): Promise<SavedFile | null> {
   return saveFile(name, utf8(await makeText()));
 }
 
-export async function saveFile(name: string, data: Uint8Array): Promise<SavedFile> {
+async function saveFile(name: string, data: Uint8Array): Promise<SavedFile> {
   const url = URL.createObjectURL(new Blob([data]));
   const a = document.createElement('a');
   a.href = url;

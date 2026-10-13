@@ -68,8 +68,9 @@ interface Props {
 }
 
 export function SplashScreen({theme, onDone, reduceMotion}: Props): React.JSX.Element {
-  const {width: screenW} = useWindowDimensions();
-  const W = Math.min(screenW * 0.9, 480);
+  const {width: screenW, height: screenH} = useWindowDimensions();
+  // The stacked logo is tall and narrow, so height is usually the limit.
+  const W = Math.min(screenW * 0.9, 480, (screenH * 0.7 * LOGO_W) / LOGO_H);
   const scale = W / LOGO_W;
   const H = LOGO_H * scale;
   const useNative = Platform.OS !== 'web';

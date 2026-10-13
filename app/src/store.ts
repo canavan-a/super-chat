@@ -782,13 +782,27 @@ export interface Attachment {
   h?: number;
 }
 
-export async function sendFiles(key: string, files: Attachment[], body: string, replyTo?: string) {
+/** onStatus gets a short line to show while it works ("Uploading x.jpg… 40%"). */
+export async function sendFiles(
+  key: string,
+  files: Attachment[],
+  body: string,
+  replyTo?: string,
+  onStatus?: (status: string) => void,
+) {
   const r = rooms.get(key);
   if (!r) throw new Error('room not loaded');
   const refs: FileRef[] = [];
-  for (const f of files) {
+  for (const [i, f] of files.entries()) {
+    const which = files.length > 1 ? ` (${i + 1}/${files.length})` : '';
+    onStatus?.(`Encrypting ${f.name}${which}…`);
+    // Let that paint before encrypting, which holds the JS thread briefly.
+    await new Promise(res => setTimeout(res, 0));
     const {key: fk, sealed} = encryptBlob(f.data);
-    const blob = await uploadBlob(r.server, r.id, r.me, sealed);
+    onStatus?.(`Uploading ${f.name}${which}…`);
+    const blob = await uploadBlob(r.server, r.id, r.me, sealed, frac =>
+      onStatus?.(`Uploading ${f.name}${which}… ${Math.round(frac * 100)}%`),
+    );
     refs.push({blob, key: b64(fk), name: f.name, mime: f.mime, size: f.data.length, w: f.w, h: f.h});
   }
   await send(key, {t: 'file', files: refs, body: body || undefined, replyTo}, refs.map(x => x.blob));

@@ -61,14 +61,19 @@ const FileSaver = NativeModules.FileSaver as FileSaverNative;
 
 /**
  * "Save as…": opens the system save dialog first, so the user picks the folder
- * (it remembers the last one), then builds the text, which may be slow. Null
- * if the dialog was cancelled.
+ * (it remembers the last one), then gets the bytes, which may be slow
+ * (encrypting a key file, downloading an attachment). Null if the dialog was
+ * cancelled.
  */
-export async function saveTextFileAs(name: string, makeText: () => Promise<string>): Promise<SavedFile | null> {
-  const uri = await FileSaver.create(name, 'application/json');
+export async function saveFileAs(
+  name: string,
+  mime: string,
+  makeData: () => Promise<Uint8Array>,
+): Promise<SavedFile | null> {
+  const uri = await FileSaver.create(name, mime || 'application/octet-stream');
   if (!uri) return null;
   try {
-    const saved = await FileSaver.write(uri, base64.encode(utf8(await makeText())));
+    const saved = await FileSaver.write(uri, base64.encode(await makeData()));
     return {name: saved ?? name, location: 'the folder you picked'};
   } catch (e) {
     FileSaver.discard(uri).catch(() => {});
@@ -76,19 +81,8 @@ export async function saveTextFileAs(name: string, makeText: () => Promise<strin
   }
 }
 
-/** Saves to Downloads (renaming rather than overwriting). */
-export async function saveFile(name: string, data: Uint8Array): Promise<SavedFile> {
-  const safe = name.replace(/[^\w.\- ]/g, '_') || 'file';
-  let path = `${RNFS.DownloadDirectoryPath}/${safe}`;
-  for (let i = 1; await RNFS.exists(path); i++) {
-    path = `${RNFS.DownloadDirectoryPath}/${safe.replace(/(\.[^.]*)?$/, ` (${i})$1`)}`;
-  }
-  await RNFS.writeFile(path, base64.encode(data), 'base64');
-  // Without this the file is on disk but Android's Files/Downloads views
-  // don't list it until the media scanner happens to come by.
-  await RNFS.scanFile(path).catch(() => {});
-  return {name: path.split('/').pop()!, location: 'Downloads'};
-}
+export const saveTextFileAs = (name: string, makeText: () => Promise<string>): Promise<SavedFile | null> =>
+  saveFileAs(name, 'application/json', async () => utf8(await makeText()));
 
 export async function pickImages(): Promise<PickedFile[]> {
   const res = await launchImageLibrary({
