@@ -10,8 +10,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useEffect, useReducer, useRef} from 'react';
 
 import {api, ApiError, downloadBlob, uploadBlob} from './api';
+import {clearSealed, getSealed, putSealed, removeSealed} from './blobDisk';
 import {
   applyEvent,
+  AvatarRef,
   b64,
   buildEvents,
   cloneState,
@@ -50,7 +52,28 @@ import {
 import {session} from './session';
 import {normalizeServer, settingsStore} from './settings';
 
-export const ROOM_COLORS = ['#4C8BF5', '#34C759', '#FF9500', '#FF3B30', '#AF52DE', '#8E8E93'];
+// Room colors to pick from (any color in the log still shows). Grey is the
+// fallback for a room whose color hasn't loaded.
+export const ROOM_COLORS = [
+  '#4C8BF5', // blue
+  '#0A84FF', // azure
+  '#5AC8FA', // sky
+  '#30B0C7', // teal
+  '#00C7BE', // mint
+  '#34C759', // green
+  '#8BC34A', // lime
+  '#FFCC00', // yellow
+  '#FF9500', // orange
+  '#FF6B35', // tangerine
+  '#FF3B30', // red
+  '#FF2D55', // pink
+  '#E040FB', // magenta
+  '#AF52DE', // purple
+  '#5856D6', // indigo
+  '#A2845E', // brown
+  '#8E8E93', // grey
+];
+export const FALLBACK_ROOM_COLOR = '#8E8E93';
 
 export interface ChatMessage {
   id: string;
@@ -82,6 +105,8 @@ export interface Room {
   typing: Record<string, number>;
   hasMore: boolean;
   loaded: boolean;
+  /** The wipe (its time) this device last handled; see dropWiped. */
+  wipeSeen?: number;
   loading: boolean;
   lastAt: number;
   lastPos: number;
@@ -139,7 +164,7 @@ export function roomList(): RoomListItem[] {
       server: r.server,
       id: r.id,
       name: r.view?.name ?? 'Encrypted room',
-      color: r.view?.color ?? ROOM_COLORS[5],
+      color: r.view?.color ?? FALLBACK_ROOM_COLOR,
       unread: r.lastPos > (lastRead[r.key] ?? 0) && r.lastPos > 0,
       lastAt: r.lastAt,
     }))
@@ -267,6 +292,41 @@ async function loadState(r: Room): Promise<void> {
   await loadKeys(r);
   r.view = roomView(r.log, r.keys);
   r.error = null;
+  // Reload after this returns: openRoom may be the caller, mid-load.
+  if (dropWiped(r)) setTimeout(() => openRoom(r.key).catch(() => {}), 0);
+}
+
+/**
+ * Removes messages from memory (and their cached attachments from the device):
+ * deleted for everyone, or wiped.
+ */
+function forgetMessages(r: Room, gone: (m: ChatMessage) => boolean) {
+  const blobs: string[] = [];
+  r.messages = r.messages.filter(m => {
+    if (m.pending || !gone(m)) return true;
+    if (m.content?.t === 'file') for (const f of m.content.files) blobs.push(f.blob);
+    return false;
+  });
+  for (const b of blobs) blobCache.delete(b);
+  if (blobs.length) removeSealed(blobs);
+}
+
+/**
+ * A wipe deletes every message up to it, on the server. When the log shows one
+ * this device hasn't handled yet, drop everything held for the room so it
+ * reloads from the server, which did the deleting exactly. (Comparing times
+ * instead would trust the wiper's clock.) Returns whether it dropped anything.
+ */
+function dropWiped(r: Room): boolean {
+  const w = r.view?.wiped;
+  if (!w || r.wipeSeen === w.at) return false;
+  const first = r.wipeSeen === undefined && r.messages.length === 0;
+  r.wipeSeen = w.at;
+  if (first) return false;
+  forgetMessages(r, () => true);
+  r.hasMore = true;
+  r.loaded = false;
+  return true;
 }
 
 async function loadKeys(r: Room): Promise<void> {
@@ -292,6 +352,7 @@ async function loadKeys(r: Room): Promise<void> {
  */
 export async function refreshRooms(): Promise<void> {
   const {servers} = await settingsStore.load();
+  await loadMyAvatar();
   try {
     lastRead = JSON.parse((await AsyncStorage.getItem(LAST_READ_KEY)) ?? '{}');
   } catch {
@@ -309,6 +370,7 @@ export async function refreshRooms(): Promise<void> {
           try {
             await loadState(r);
             await maybeRotate(r);
+            syncAvatar(r).catch(() => {});
           } catch (e) {
             if (e instanceof ApiError && e.status === 404) rooms.delete(r.key);
             else r.error = String((e as Error).message ?? e);
@@ -579,10 +641,9 @@ async function handlePush(server: string, msg: any) {
         };
         if (parsed.kind === 'epoch' || parsed.kind === 'join') await loadState(r);
         if (parsed.kind === 'epoch' && parsed.author !== r.me.id) republishProfile(r).catch(() => {});
-        if (parsed.kind === 'delete') {
-          r.messages = r.messages.filter(m => m.id !== parsed.pub.msg);
-        }
+        if (parsed.kind === 'delete') forgetMessages(r, m => m.id === parsed.pub.msg);
         r.view = roomView(r.log, r.keys);
+        if (parsed.kind === 'wipe' && dropWiped(r)) openRoom(r.key).catch(() => {});
       }
       pruneExpired(r);
       await maybeRotate(r);
@@ -605,7 +666,7 @@ async function handlePush(server: string, msg: any) {
     }
     case 'deleted': {
       const ids = new Set<string>(msg.ids);
-      r.messages = r.messages.filter(m => !ids.has(m.id));
+      forgetMessages(r, m => ids.has(m.id));
       emit();
       return;
     }
@@ -697,12 +758,87 @@ async function maybeRotate(r: Room) {
   }
 }
 
+// ---- profile picture ----
+//
+// One picture for the account, published into every room: each room gets its
+// own encrypted copy (its own blob and key), so rooms still can't be linked.
+// The original stays on this device only, to publish into rooms joined later.
+
+const MY_AVATAR_KEY = 'superchat.myAvatar.v1';
+/** This device's picture (base64 JPEG) or null if removed, and when it was set. */
+let myAvatar: {data: string | null; at: number} | null = null;
+
+async function loadMyAvatar() {
+  try {
+    myAvatar = JSON.parse((await AsyncStorage.getItem(MY_AVATAR_KEY)) ?? 'null');
+  } catch {
+    myAvatar = null;
+  }
+}
+
+export const getMyAvatar = (): Uint8Array | null => (myAvatar?.data ? unb64(myAvatar.data) : null);
+
+/** Sets (or, with null, removes) the profile picture in every room. */
+export async function setMyAvatar(jpeg: Uint8Array | null): Promise<void> {
+  myAvatar = {data: jpeg ? b64(jpeg) : null, at: Date.now()};
+  await AsyncStorage.setItem(MY_AVATAR_KEY, JSON.stringify(myAvatar));
+  emit();
+  const results = await Promise.allSettled([...rooms.values()].map(syncAvatar));
+  const failed = results.filter(x => x.status === 'rejected').length;
+  if (failed) throw new Error(`Couldn't update ${failed} room${failed > 1 ? 's' : ''}; it'll retry next launch.`);
+}
+
+/**
+ * Brings this room's copy of my picture in line with this device's. Only a
+ * newer setting wins, so two devices on one account don't fight over it.
+ */
+async function syncAvatar(r: Room): Promise<void> {
+  const mine = myAvatar;
+  const cur = r.view?.avatars[r.me.id];
+  if (!mine || !r.log || !(r.me.id in r.log.state.members)) return;
+  if (cur && cur.at >= mine.at) return;
+  if (!cur && !mine.data) return;
+  if (!mine.data) {
+    await api.setAvatar(r.server, r.id, r.me, '');
+    await publishProfile(r, null);
+    return;
+  }
+  const picture = unb64(mine.data);
+  const {key, sealed} = encryptBlob(picture);
+  const blob = await uploadBlob(r.server, r.id, r.me, sealed);
+  await api.setAvatar(r.server, r.id, r.me, blob);
+  putSealed(blob, sealed);
+  remember(blob, picture);
+  await publishProfile(r, {blob, key: b64(key), at: mine.at});
+}
+
+function publishProfile(r: Room, avatar: AvatarRef | null) {
+  return append(r, log => ({
+    events: [
+      {kind: 'profile', enc: {displayName: myName(r), avatar}, encEpoch: log.state.epoch, encKey: r.keys[log.state.epoch]},
+    ],
+  }));
+}
+
+/** A profile event's contents: the name, carrying the current picture along. */
+function profileEnc(r: Room, displayName: string): Record<string, unknown> {
+  const avatar = r.view?.avatars[r.me.id];
+  return avatar ? {displayName, avatar} : {displayName};
+}
+
+/** A member's picture, decrypted (cached on disk sealed, like attachments). Null if they have none. */
+export async function fetchAvatar(key: string, member: string): Promise<Uint8Array | null> {
+  const ref = rooms.get(key)?.view?.avatars[member];
+  if (!ref) return null;
+  return fetchFile(key, {blob: ref.blob, key: ref.key, name: 'avatar.jpg', mime: 'image/jpeg', size: 0});
+}
+
 async function republishProfile(r: Room) {
   const name = myName(r);
   const s = r.log?.state;
   if (!name || !s || !r.keys[s.epoch]) return;
   await append(r, log => ({
-    events: [{kind: 'profile', enc: {displayName: name}, encEpoch: log.state.epoch, encKey: r.keys[log.state.epoch]}],
+    events: [{kind: 'profile', enc: profileEnc(r, name), encEpoch: log.state.epoch, encKey: r.keys[log.state.epoch]}],
   }));
 }
 
@@ -724,6 +860,7 @@ export async function createRoom(server: string, name: string, color: string, re
   const r = addRoom(server, room);
   await loadState(r);
   emit();
+  syncAvatar(r).catch(() => {});
   return r.key;
 }
 
@@ -803,6 +940,9 @@ export async function sendFiles(
     const blob = await uploadBlob(r.server, r.id, r.me, sealed, frac =>
       onStatus?.(`Uploading ${f.name}${which}… ${Math.round(frac * 100)}%`),
     );
+    // What we just sent never needs downloading back.
+    putSealed(blob, sealed);
+    remember(blob, f.data);
     refs.push({blob, key: b64(fk), name: f.name, mime: f.mime, size: f.data.length, w: f.w, h: f.h});
   }
   await send(key, {t: 'file', files: refs, body: body || undefined, replyTo}, refs.map(x => x.blob));
@@ -814,17 +954,45 @@ export async function fetchFile(key: string, ref: FileRef): Promise<Uint8Array> 
   if (cached) return cached;
   const r = rooms.get(key);
   if (!r) throw new Error('room not loaded');
-  const data = decryptBlob(unb64(ref.key), await downloadBlob(r.server, r.id, r.me, ref.blob));
-  // Keep a few recent images decrypted in memory only; never on disk.
-  if (blobCache.size > 24) blobCache.delete(blobCache.keys().next().value!);
-  blobCache.set(ref.blob, data);
+  const fileKey = unb64(ref.key);
+  // The device cache holds the sealed blob (blobDisk.ts); a damaged copy just
+  // means downloading it again.
+  let data: Uint8Array | null = null;
+  const onDisk = await getSealed(ref.blob);
+  if (onDisk) {
+    try {
+      data = decryptBlob(fileKey, onDisk);
+    } catch {
+      data = null;
+    }
+  }
+  if (!data) {
+    const sealed = await downloadBlob(r.server, r.id, r.me, ref.blob);
+    data = decryptBlob(fileKey, sealed);
+    putSealed(ref.blob, sealed);
+  }
+  remember(ref.blob, data);
   return data;
+}
+
+// Keep a few recent images decrypted in memory only; never on disk.
+function remember(blob: string, data: Uint8Array) {
+  if (blobCache.size > 24) blobCache.delete(blobCache.keys().next().value!);
+  blobCache.set(blob, data);
 }
 
 export function react(key: string, target: string, emoji: string) {
   const r = rooms.get(key)!;
   const mine = r.reactions[target]?.[emoji]?.includes(r.me.id);
   return send(key, {t: 'reaction', target, emoji, remove: mine || undefined});
+}
+
+/** Admins only (the log enforces it): deletes every message so far, for everyone. */
+export async function wipeChat(key: string) {
+  const r = rooms.get(key)!;
+  await append(r, () => ({events: [{kind: 'wipe', pub: {}}]}));
+  if (dropWiped(r)) await openRoom(r.key);
+  emit();
 }
 
 export async function deleteMessage(key: string, msg: ChatMessage) {
@@ -856,7 +1024,7 @@ export const setMeta = (key: string, name: string, color: string) =>
 
 export const setDisplayName = (key: string, displayName: string) =>
   append(rooms.get(key)!, log => ({
-    events: [{kind: 'profile', enc: {displayName}, encEpoch: log.state.epoch, encKey: rooms.get(key)!.keys[log.state.epoch]}],
+    events: [{kind: 'profile', enc: profileEnc(rooms.get(key)!, displayName), encEpoch: log.state.epoch, encKey: rooms.get(key)!.keys[log.state.epoch]}],
   }));
 
 /** Admins only (the log enforces it). Returns the shareable link. */
@@ -926,6 +1094,7 @@ export async function join(link: InviteLink, displayName: string): Promise<strin
       const r = addRoom(link.server, res.room);
       await loadState(r);
       emit();
+      syncAvatar(r).catch(() => {});
       return r.key;
     }
     const preview = openPreview(link.secret, res.preview);
@@ -935,6 +1104,7 @@ export async function join(link: InviteLink, displayName: string): Promise<strin
       const r = addRoom(link.server, res.room);
       await loadState(r);
       emit();
+      syncAvatar(r).catch(() => {});
       return r.key;
     } catch (e) {
       if (e instanceof ApiError && e.status === 409 && e.message === 'conflict' && attempt === 0) continue;
@@ -952,7 +1122,10 @@ export function resetStore() {
   vaultSaved.clear();
   rooms.clear();
   blobCache.clear();
+  clearSealed().catch(() => {});
   roomsLoaded = false;
   AsyncStorage.removeItem(ROOMS_KEY).catch(() => {});
+  myAvatar = null;
+  AsyncStorage.removeItem(MY_AVATAR_KEY).catch(() => {});
   emit();
 }

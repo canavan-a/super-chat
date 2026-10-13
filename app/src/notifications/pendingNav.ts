@@ -22,3 +22,12 @@ export const pendingNav = {
     return () => listeners.delete(listener);
   },
 };
+
+/** Stands in for a room key when a tap should open Settings (the update notification). */
+export const SETTINGS_NAV = '#settings';
+
+/** Where a tapped notification should go: its room, or SETTINGS_NAV. */
+export function navTarget(data: Record<string, unknown> | undefined): string | null {
+  const t = data?.nav ?? data?.roomKey;
+  return typeof t === 'string' ? t : null;
+}

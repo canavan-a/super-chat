@@ -466,3 +466,94 @@ func TestLeaveThenRotate(t *testing.T) {
 	code, body = bob.do("POST", "/v1/rooms/"+r.id+"/events", rooms.Batch{Events: []proto.SignedEvent{ep}, Envelopes: env})
 	want(t, "member rotates again", code, 403, body)
 }
+
+func TestAvatars(t *testing.T) {
+	e := newEnv(t)
+	alice, bob, eve := e.user(), e.user(), e.user()
+	r := e.createRoom(alice)
+	iv, _, _ := r.invite(alice, 0, 0)
+	r.join(bob, iv, []string{alice.id})
+	r.sync()
+
+	upload := func(u *user) string {
+		code, out := u.raw("PUT", "/v1/rooms/"+r.id+"/blobs", []byte("sealed-picture"))
+		want(t, "upload", code, 201, string(out))
+		var b struct{ ID string }
+		_ = json.Unmarshal(out, &b)
+		return b.ID
+	}
+	first := upload(alice)
+	code, body := alice.do("PUT", "/v1/rooms/"+r.id+"/avatar", map[string]any{"blob": first})
+	want(t, "set avatar", code, 204, body)
+
+	// Other members can read it (no message needed); outsiders can't.
+	code, _ = bob.raw("GET", "/v1/rooms/"+r.id+"/blobs/"+first, nil)
+	want(t, "member reads avatar", code, 200, "")
+	code, _ = eve.raw("GET", "/v1/rooms/"+r.id+"/blobs/"+first, nil)
+	want(t, "outsider reads avatar", code, 404, "")
+
+	// Someone else's upload can't become your avatar.
+	theirs := upload(bob)
+	code, body = alice.do("PUT", "/v1/rooms/"+r.id+"/avatar", map[string]any{"blob": theirs})
+	want(t, "steal blob", code, 400, body)
+
+	// The sweeper keeps avatars past the orphan window.
+	e.now = e.now.Add(2 * time.Hour)
+	if _, err := sweeper.Sweep(e.svc); err != nil {
+		t.Fatal(err)
+	}
+	code, _ = bob.raw("GET", "/v1/rooms/"+r.id+"/blobs/"+first, nil)
+	want(t, "avatar survives sweep", code, 200, "")
+
+	// A new avatar replaces (deletes) the old one.
+	second := upload(alice)
+	code, body = alice.do("PUT", "/v1/rooms/"+r.id+"/avatar", map[string]any{"blob": second})
+	want(t, "replace avatar", code, 204, body)
+	code, _ = bob.raw("GET", "/v1/rooms/"+r.id+"/blobs/"+first, nil)
+	want(t, "old avatar gone", code, 404, "")
+	code, _ = bob.raw("GET", "/v1/rooms/"+r.id+"/blobs/"+second, nil)
+	want(t, "new avatar", code, 200, "")
+
+	// Clearing it removes it.
+	code, body = alice.do("PUT", "/v1/rooms/"+r.id+"/avatar", map[string]any{"blob": ""})
+	want(t, "clear avatar", code, 204, body)
+	code, _ = bob.raw("GET", "/v1/rooms/"+r.id+"/blobs/"+second, nil)
+	want(t, "cleared avatar", code, 404, "")
+}
+
+func TestWipe(t *testing.T) {
+	e := newEnv(t)
+	alice, bob := e.user(), e.user()
+	r := e.createRoom(alice)
+	iv, _, _ := r.invite(alice, 0, 0)
+	r.join(bob, iv, []string{alice.id})
+	r.sync()
+
+	code, out := bob.raw("PUT", "/v1/rooms/"+r.id+"/blobs", []byte("sealed-file"))
+	want(t, "upload", code, 201, string(out))
+	var blob struct{ ID string }
+	_ = json.Unmarshal(out, &blob)
+	code, body := bob.do("POST", "/v1/rooms/"+r.id+"/messages", map[string]any{"id": proto.NewID(), "epoch": r.ep, "kind": "msg", "ct": "x", "blobs": []string{blob.ID}})
+	want(t, "post with blob", code, 201, body)
+	r.send(alice, "msg")
+
+	// Only admins can wipe.
+	code, body = r.post(bob, rooms.Batch{Events: []proto.SignedEvent{r.ev(bob, "wipe", nil)}})
+	want(t, "member wipes", code, 403, body)
+	r.sync()
+	code, body = r.post(alice, rooms.Batch{Events: []proto.SignedEvent{r.ev(alice, "wipe", nil)}})
+	want(t, "admin wipes", code, 200, body)
+
+	if _, msgs := r.messages(alice); len(msgs) != 0 {
+		t.Fatalf("want no messages after wipe, got %d", len(msgs))
+	}
+	code, _ = bob.raw("GET", "/v1/rooms/"+r.id+"/blobs/"+blob.ID, nil)
+	want(t, "attachment after wipe", code, 404, "")
+
+	// The room carries on.
+	r.sync()
+	r.send(bob, "msg")
+	if _, msgs := r.messages(alice); len(msgs) != 1 {
+		t.Fatalf("want the new message after wipe, got %d", len(msgs))
+	}
+}

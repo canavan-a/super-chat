@@ -10,8 +10,8 @@ import {
   Link,
   Lock,
   LucideIcon,
-  Menu,
   MoreVertical,
+  Plus,
   Paperclip,
   Reply,
   Send,
@@ -28,7 +28,6 @@ import {
 // one super-badger uses, so both apps draw icons the same way. It renders
 // through react-native-svg, whose web resolution is fixed in vite.config.ts.
 export type IconName =
-  | 'menu'
   | 'kebab'
   | 'gear'
   | 'chevron-left'
@@ -48,10 +47,10 @@ export type IconName =
   | 'members'
   | 'shield'
   | 'lock'
-  | 'link';
+  | 'link'
+  | 'plus';
 
 const ICONS: Record<IconName, LucideIcon> = {
-  menu: Menu,
   kebab: MoreVertical,
   gear: Settings,
   'chevron-left': ChevronLeft,
@@ -72,6 +71,7 @@ const ICONS: Record<IconName, LucideIcon> = {
   shield: Shield,
   lock: Lock,
   link: Link,
+  plus: Plus,
 };
 
 export function Icon({

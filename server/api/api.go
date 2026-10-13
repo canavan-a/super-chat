@@ -105,6 +105,7 @@ func (a *API) Router() *gin.Engine {
 	signed.POST("/rooms/:id/messages", a.rateLimit(a.msgsPerIP, byIP), a.rateLimit(a.msgsPerAcct, byAcct), a.postMessage)
 	signed.GET("/rooms/:id/invites/uses", a.rateLimit(a.readsPerAcct, byAcct), a.inviteUses)
 	signed.GET("/rooms/:id/blobs/:blob", a.rateLimit(a.readsPerAcct, byAcct), a.getBlob)
+	signed.PUT("/rooms/:id/avatar", a.rateLimit(a.blobsPerAcct, byAcct), a.putAvatar)
 	signed.POST("/invites/:id/join", a.rateLimit(a.joinsPerIP, byIP), a.joinInvite)
 
 	blobs := v1.Group("", a.requireSignature(a.cfg.MaxBlobBytes))
@@ -373,13 +374,13 @@ func (a *API) getBlob(c *gin.Context) {
 	if !ok {
 		return
 	}
-	// Only blobs attached to a message the caller may read (or their own
-	// upload in flight).
+	// Only blobs attached to a message the caller may read, members'
+	// avatars, or the caller's own upload in flight.
 	var n int64
 	a.db.Raw(`
 		SELECT COUNT(*) FROM blobs b LEFT JOIN messages msg ON msg.id = b.message_id
 		WHERE b.id = ? AND b.room_id = ?
-		  AND ((msg.id IS NOT NULL AND msg.epoch >= ?) OR (b.message_id IS NULL AND b.uploader = ?))`,
+		  AND ((msg.id IS NOT NULL AND msg.epoch >= ?) OR b.avatar = 1 OR (b.message_id IS NULL AND b.uploader = ?))`,
 		c.Param("blob"), st.Room, m.FirstEpoch, caller(c)).Scan(&n)
 	if n == 0 || m.FirstEpoch == 0 {
 		abort(c, http.StatusNotFound, "no such blob")
@@ -395,6 +396,59 @@ func (a *API) getBlob(c *gin.Context) {
 	c.Status(http.StatusOK)
 	c.Header("Content-Type", "application/octet-stream")
 	_, _ = io.Copy(c.Writer, f)
+}
+
+// putAvatar makes one of the caller's uploaded blobs their profile picture in
+// this room, replacing (and deleting) any previous one. {"blob": ""} clears
+// it. The key to the picture travels in the caller's encrypted profile event.
+func (a *API) putAvatar(c *gin.Context) {
+	st, _, ok := a.member(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Blob string `json:"blob"`
+	}
+	if !bindBody(c, &req) {
+		return
+	}
+	me := caller(c)
+	var old []string
+	err := a.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&database.Blob{}).
+			Where("room_id = ? AND uploader = ? AND avatar = 1 AND id <> ?", st.Room, me, req.Blob).
+			Pluck("id", &old).Error; err != nil {
+			return err
+		}
+		if len(old) > 0 {
+			if err := tx.Where("id IN ?", old).Delete(&database.Blob{}).Error; err != nil {
+				return err
+			}
+		}
+		if req.Blob == "" {
+			return nil
+		}
+		res := tx.Model(&database.Blob{}).
+			Where("id = ? AND room_id = ? AND uploader = ? AND message_id IS NULL", req.Blob, st.Room, me).
+			Update("avatar", true)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected != 1 {
+			return errBadBlobs
+		}
+		return nil
+	})
+	if errors.Is(err, errBadBlobs) {
+		abort(c, http.StatusBadRequest, "unknown or already used blob")
+		return
+	}
+	if err != nil {
+		abort(c, http.StatusInternalServerError, "db error")
+		return
+	}
+	a.rooms.RemoveBlobFiles(old)
+	c.Status(http.StatusNoContent)
 }
 
 // ---- invites ----

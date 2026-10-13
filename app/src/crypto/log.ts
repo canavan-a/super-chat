@@ -216,6 +216,11 @@ export function applyEvent(s: LogState, e: ParsedEvent, now = 0): void {
       if (!isId(p.msg)) throw new Error('bad delete');
       if (p.sender !== a && !isAdmin(a)) throw new Error('only the sender or an admin can delete');
       break;
+    case 'wipe':
+      // Deletes every message so far, for everyone; the event stays in the
+      // log so the room shows who wiped it and when.
+      if (!isAdmin(a)) throw new Error('only admins can wipe the chat');
+      break;
     default:
       throw new Error(`unknown event kind ${e.kind}`);
   }

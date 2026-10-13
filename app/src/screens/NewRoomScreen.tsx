@@ -12,7 +12,7 @@ export function NewRoomScreen({onNavigate}: {onNavigate: (route: Route) => void}
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const s = settingsStore.get();
   const [name, setName] = useState('');
-  const [color, setColor] = useState(ROOM_COLORS[Math.floor(Math.random() * 5)]);
+  const [color, setColor] = useState(ROOM_COLORS[Math.floor(Math.random() * (ROOM_COLORS.length - 1))]);
   const [displayName, setDisplayName] = useState(s.displayName);
   const [retention, setRetention] = useState(30);
   const [server, setServer] = useState(s.defaultServer);
@@ -170,30 +170,12 @@ export function JoinScreen({link: initial, onNavigate}: {link?: string; onNaviga
   );
 }
 
-export function HomeScreen({onNavigate}: {onNavigate: (route: Route) => void}): React.JSX.Element {
-  const theme = useTheme();
-  const styles = useMemo(() => makeStyles(theme), [theme]);
-  return (
-    <View style={[styles.container, styles.homeCenter]}>
-      <Text style={styles.cardTitle}>No room open</Text>
-      <Text style={[styles.help, styles.centerText]}>Rooms are invite-only. Start one, or paste an invite link someone sent you.</Text>
-      <Pressable style={[styles.primary, styles.homeButton]} onPress={() => onNavigate({name: 'newRoom'})}>
-        <Text style={styles.primaryText}>+ New Room</Text>
-      </Pressable>
-      <Pressable style={[styles.secondary, styles.homeButton]} onPress={() => onNavigate({name: 'join'})}>
-        <Text style={styles.secondaryText}>Join via link</Text>
-      </Pressable>
-    </View>
-  );
-}
-
 function makeStyles(theme: Theme) {
   return StyleSheet.create({
     container: {flex: 1, backgroundColor: theme.bg},
     content: {padding: 16, paddingBottom: 48, maxWidth: 560, width: '100%', alignSelf: 'center'},
     label: {fontSize: 12, fontWeight: '700', color: theme.textMuted, marginTop: 14, marginBottom: 6},
     help: {fontSize: 12, color: theme.textMuted, lineHeight: 17, marginTop: 6},
-    centerText: {textAlign: 'center', maxWidth: 320},
     input: {
       borderWidth: 1,
       borderColor: theme.border,
@@ -205,7 +187,7 @@ function makeStyles(theme: Theme) {
       fontSize: 15,
     },
     linkInput: {minHeight: 70, fontFamily: 'monospace', fontSize: 13, textAlignVertical: 'top'},
-    swatches: {flexDirection: 'row', gap: 10, marginTop: 10},
+    swatches: {flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10},
     swatch: {width: 28, height: 28, borderRadius: 14, borderWidth: 2, borderColor: 'transparent'},
     swatchOn: {borderColor: theme.text},
     chips: {flexDirection: 'row', flexWrap: 'wrap', gap: 6},
@@ -230,7 +212,5 @@ function makeStyles(theme: Theme) {
       backgroundColor: theme.surface,
     },
     cardTitle: {fontSize: 18, fontWeight: '800', color: theme.text},
-    homeCenter: {alignItems: 'center', justifyContent: 'center', padding: 24},
-    homeButton: {alignSelf: 'center', maxWidth: 320, width: '100%'},
   });
 }

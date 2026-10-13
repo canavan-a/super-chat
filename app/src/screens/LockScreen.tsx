@@ -3,6 +3,7 @@ import {Pressable, ScrollView, Text, View} from 'react-native';
 
 import {Icon} from '../components/Icon';
 import {loadIdentity, NEEDS_PASSPHRASE} from '../keystore';
+import {splashHold} from '../logo/splashHold';
 import {LogoArt} from '../logo/LogoArt';
 import {useTheme} from '../theme';
 import {makeStyles, PassphraseForm} from './OnboardingScreen';
@@ -30,9 +31,15 @@ export function LockScreen({
       setError(null);
       try {
         const entropy = await loadIdentity(pass);
-        if (entropy) onUnlock(entropy);
-        else if (!NEEDS_PASSPHRASE) setError('Unlock cancelled.');
+        if (entropy) {
+          onUnlock(entropy);
+          return;
+        }
+        if (!NEEDS_PASSPHRASE) setError('Unlock cancelled.');
+        // The lock screen has something to say: stop showing the splash over it.
+        splashHold.release();
       } catch (e) {
+        splashHold.release();
         setError((e as Error).message || 'Could not unlock.');
       } finally {
         setBusy(false);

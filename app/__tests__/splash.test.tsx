@@ -8,7 +8,7 @@ import renderer, {act} from 'react-test-renderer';
 
 import {MAX_SPLASH_STRIKES, SplashBoundary, SplashGate, resetSplashForTests} from '../src/logo/SplashGate';
 import {SPLASH_TIMING, SPLASH_TOTAL, SplashScreen} from '../src/logo/SplashScreen';
-import {MARK_STRIPS, WORD_STRIPS} from '../src/logo/LogoArt';
+import {WORD_STRIPS} from '../src/logo/LogoArt';
 import {settingsStore} from '../src/settings';
 import {ThemeProvider, THEMES} from '../src/theme';
 
@@ -47,10 +47,10 @@ describe('SplashScreen', () => {
   const svgCount = (tree: renderer.ReactTestRenderer) =>
     tree.root.findAll(n => typeof n.props?.viewBox === 'string' && n.props.width !== undefined).length;
 
-  it('draws the whole logo: bubble, dots and their glint, nine letters, and the shine strips', () => {
+  it('draws the whole logo: nine letters and the shine strips', () => {
     const tree = mount(() => {});
-    const strips = [...MARK_STRIPS, ...WORD_STRIPS].filter(s => s.tones.length > 0).length;
-    expect(svgCount(tree)).toBe(3 + 9 + strips); // bubble + dots + dots glint, letters, strips
+    const strips = WORD_STRIPS.filter(s => s.tones.length > 0).length;
+    expect(svgCount(tree)).toBe(9 + strips); // letters, strips
     act(() => tree.unmount());
   });
 
@@ -140,6 +140,17 @@ describe('SplashScreen', () => {
     act(() => jest.advanceTimersByTime(1200));
     expect(onDone).toHaveBeenCalledTimes(1);
     act(() => again.unmount());
+  });
+
+  it('stays up while held (the app is loading), then fades once let go', () => {
+    const onDone = jest.fn();
+    const tree = mount(onDone, {hold: true});
+    act(() => jest.advanceTimersByTime(SPLASH_TOTAL + 5000));
+    expect(onDone).not.toHaveBeenCalled();
+    act(() => tree.update(<SplashScreen theme={THEMES.ember} onDone={onDone} reduceMotion={false} hold={false} />));
+    act(() => jest.advanceTimersByTime(SPLASH_TIMING.exit + 200));
+    expect(onDone).toHaveBeenCalledTimes(1);
+    act(() => tree.unmount());
   });
 
   it('is a sane length', () => {

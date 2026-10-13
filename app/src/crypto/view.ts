@@ -30,6 +30,22 @@ export interface RoomView {
   epoch: number;
   /** Profile names of everyone seen in the log, including past members. */
   names: Record<string, string>;
+  /** Profile pictures, by member: the blob and the key to open it. */
+  avatars: Record<string, AvatarRef>;
+  /** The latest "wipe chat history": who did it and when. Nothing older survives it. */
+  wiped: {by: string; at: number} | null;
+}
+
+/**
+ * A profile picture: an encrypted blob marked as the member's avatar on the
+ * server (PUT /rooms/:id/avatar), with its key. A new picture is a new blob,
+ * so the blob id doubles as the "has it changed" check. `at` is when it was
+ * set, so a device only replaces a picture newer than its own.
+ */
+export interface AvatarRef {
+  blob: string;
+  key: string;
+  at: number;
 }
 
 export interface ReplayResult {
@@ -59,6 +75,8 @@ export function roomView(r: ReplayResult, keys: Record<number, Uint8Array>): Roo
   let snapName: string | null = null;
   let snapColor: string | null = null;
   const names: Record<string, string> = {};
+  const avatars: Record<string, AvatarRef> = {};
+  let wiped: {by: string; at: number} | null = null;
   const snapNames: Record<string, string> = {};
   const joined: Record<string, string[]> = {};
 
@@ -78,12 +96,24 @@ export function roomView(r: ReplayResult, keys: Record<number, Uint8Array>): Roo
         break;
       }
       case 'profile': {
-        const p = openEnc<{displayName?: string}>(e, keys);
+        const p = openEnc<{displayName?: string; avatar?: AvatarRef | null}>(e, keys);
         if (p?.displayName) names[e.author] = String(p.displayName).slice(0, 40);
+        // Present: the current picture; null: removed; absent: unchanged.
+        if (p && 'avatar' in p) {
+          const a = p.avatar;
+          if (a && typeof a.blob === 'string' && typeof a.key === 'string') {
+            avatars[e.author] = {blob: a.blob, key: a.key, at: Number(a.at) || 0};
+          } else {
+            delete avatars[e.author];
+          }
+        }
         break;
       }
       case 'join':
         (joined[e.pub.invite] ??= []).push(e.author);
+        break;
+      case 'wipe':
+        wiped = {by: e.author, at: e.ts};
         break;
     }
   }
@@ -106,5 +136,7 @@ export function roomView(r: ReplayResult, keys: Record<number, Uint8Array>): Roo
     retentionDays: s.retentionDays,
     epoch: s.epoch,
     names: allNames,
+    avatars,
+    wiped,
   };
 }

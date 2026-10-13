@@ -17,6 +17,7 @@ import {
 import type {HeaderInfo} from '../App';
 import {FileRef, fingerprint} from '../crypto';
 import {dataUri, pickFiles, pickImages, PickedFile, saveFileAs} from '../files';
+import {Avatar} from '../components/Avatar';
 import {Icon} from '../components/Icon';
 import {Overlay} from '../components/Overlay';
 import {MarkdownText} from '../components/Markdown';
@@ -33,6 +34,7 @@ import {
   openRoom,
   react,
   Room,
+  roomsReady,
   send,
   sendFiles,
   sendTyping,
@@ -56,6 +58,7 @@ export function RoomScreen({
   const theme = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const room = useStore(() => getRoom(roomKey));
+  const ready = useStore(roomsReady);
   const meId = room?.me.id ?? '';
   const [draft, setDraft] = useState('');
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
@@ -103,7 +106,7 @@ export function RoomScreen({
   if (!room) {
     return (
       <View style={styles.center}>
-        <Text style={styles.muted}>This room is gone.</Text>
+        {ready ? <Text style={styles.muted}>This room is gone.</Text> : <ActivityIndicator color={theme.textMuted} />}
       </View>
     );
   }
@@ -181,15 +184,33 @@ export function RoomScreen({
         </View>
       )}
 
-      <ChatList
-        room={room}
-        meId={meId}
-        isAdmin={isAdmin}
-        nameOf={nameOf}
-        styles={styles}
-        theme={theme}
-        onReply={m => setReplyTo(m)}
-      />
+      {!room.loaded && room.messages.length === 0 ? (
+        <View style={styles.center}>
+          {room.error && !room.loading ? (
+            <>
+              <Text style={styles.muted}>Couldn't load this room.</Text>
+              <Pressable style={styles.retryButton} onPress={() => openRoom(roomKey)}>
+                <Text style={styles.retryText}>Retry</Text>
+              </Pressable>
+            </>
+          ) : (
+            <>
+              <ActivityIndicator color={theme.textMuted} />
+              <Text style={styles.muted}>Decrypting messages…</Text>
+            </>
+          )}
+        </View>
+      ) : (
+        <ChatList
+          room={room}
+          meId={meId}
+          isAdmin={isAdmin}
+          nameOf={nameOf}
+          styles={styles}
+          theme={theme}
+          onReply={m => setReplyTo(m)}
+        />
+      )}
 
       {typing.length > 0 && (
         <View style={styles.typingRow}>
@@ -332,12 +353,24 @@ function ChatList({
     return out;
   }, [room.receipts, meId]);
 
+  // Opening a room starts the list at the top and fills it in; the scroll
+  // events from that look like the user scrolling up, which used to switch
+  // off follow-the-bottom (and start loading older messages), leaving you at
+  // the top. Until the user touches the list, or it's had a moment to settle,
+  // stay pinned to the bottom and ignore them.
+  const settled = useRef(false);
+  useEffect(() => {
+    const t = setTimeout(() => (settled.current = true), 800);
+    return () => clearTimeout(t);
+  }, []);
+
   const followBottom = () => {
-    if (!nearBottom.current) return;
+    if (settled.current && !nearBottom.current) return;
     requestAnimationFrame(() => listRef.current?.scrollToOffset({offset: contentHeight.current, animated: false}));
   };
 
   const handleScroll = (e: any) => {
+    if (!settled.current) return;
     const {contentOffset, contentSize, layoutMeasurement} = e.nativeEvent;
     const dist = contentSize.height - (contentOffset.y + layoutMeasurement.height);
     nearBottom.current = dist < 150;
@@ -351,13 +384,17 @@ function ChatList({
 
   const renderItem = ({item, index}: {item: ChatMessage; index: number}) => {
     const prev = messages[index - 1];
+    const next = messages[index + 1];
     const mine = item.sender === meId;
-    const grouped = prev && prev.sender === item.sender && item.createdAt - prev.createdAt < 5 * 60_000;
+    const grouped = !!prev && sameGroup(prev, item);
+    const lastInGroup = !next || !sameGroup(item, next);
     return (
       <MessageRow
         msg={item}
         mine={mine}
         showName={!mine && !grouped}
+        grouped={grouped}
+        lastInGroup={lastInGroup}
         name={nameOf(item.sender)}
         reply={item.content && 'replyTo' in item.content && item.content.replyTo ? byId.get(item.content.replyTo) : undefined}
         nameOf={nameOf}
@@ -384,6 +421,7 @@ function ChatList({
         renderItem={renderItem}
         contentContainerStyle={styles.chatContent}
         onScroll={handleScroll}
+        onScrollBeginDrag={() => (settled.current = true)}
         scrollEventThrottle={32}
         maintainVisibleContentPosition={nearBottom.current ? undefined : {minIndexForVisible: 0}}
         onContentSizeChange={(_w, h) => {
@@ -400,6 +438,15 @@ function ChatList({
                 <Text style={styles.startNoticeText}>
                   Messages here are end-to-end encrypted. You see history from when you joined.
                   {room.view?.retentionDays ? ` They're deleted after ${room.view.retentionDays} days.` : ''}
+                </Text>
+              </View>
+            )}
+            {!room.hasMore && room.loaded && room.view?.wiped && (
+              <View style={styles.startNotice}>
+                <Icon name="trash" size={14} color={theme.textMuted} />
+                <Text style={styles.startNoticeText}>
+                  Chat history wiped by {room.view.wiped.by === meId ? 'you' : nameOf(room.view.wiped.by)} ·{' '}
+                  {new Date(room.view.wiped.at).toLocaleString([], {dateStyle: 'medium', timeStyle: 'short'})}
                 </Text>
               </View>
             )}
@@ -505,10 +552,16 @@ function ChatList({
   );
 }
 
+/** Messages from one sender this close together stack as a group: one name, one time. */
+const GROUP_MS = 3 * 60_000;
+const sameGroup = (a: ChatMessage, b: ChatMessage) => a.sender === b.sender && b.createdAt - a.createdAt < GROUP_MS;
+
 const MessageRow = React.memo(function MessageRow({
   msg,
   mine,
   showName,
+  grouped,
+  lastInGroup,
   name,
   reply,
   nameOf,
@@ -525,6 +578,10 @@ const MessageRow = React.memo(function MessageRow({
   msg: ChatMessage;
   mine: boolean;
   showName: boolean;
+  /** follows a message from the same sender: sits tight under it */
+  grouped: boolean;
+  /** ends its group: carries the time (and their picture) */
+  lastInGroup: boolean;
   name: string;
   reply?: ChatMessage;
   nameOf: (id: string) => string;
@@ -542,55 +599,62 @@ const MessageRow = React.memo(function MessageRow({
   const textColor = mine ? theme.bubbleUserText : theme.bubbleAssistantText;
   const time = new Date(msg.createdAt).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
   return (
-    <View style={[styles.row, mine ? styles.rowMine : styles.rowTheirs]}>
-      {showName && <Text style={styles.senderName}>{name}</Text>}
-      <Pressable
-        style={[
-          styles.bubble,
-          mine ? styles.bubbleMine : styles.bubbleTheirs,
-          msg.pending && styles.bubblePending,
-          !c && styles.bubbleBroken,
-        ]}
-        onLongPress={onLongPress}
-        delayLongPress={300}>
-        {reply && (
-          <View style={[styles.quote, {borderLeftColor: mine ? theme.bubbleUserText : theme.primary}]}>
-            <Text style={[styles.quoteName, {color: textColor}]}>{nameOf(reply.sender)}</Text>
-            <Text style={[styles.quoteText, {color: textColor}]} numberOfLines={2}>
-              {reply.content?.t === 'text' ? reply.content.body : reply.content?.t === 'file' ? '📎 Attachment' : 'Message'}
-            </Text>
-          </View>
-        )}
-        {!c && <Text style={[styles.brokenText, {color: textColor}]}>🔒 {msg.error ?? 'Encrypted message'}</Text>}
-        {c?.t === 'file' &&
-          c.files.map(f =>
-            f.mime.startsWith('image/') ? (
-              <ImageAttachment key={f.blob} roomKey={roomKey} file={f} styles={styles} theme={theme} onOpen={onOpenImage} />
-            ) : (
-              <FileAttachment key={f.blob} roomKey={roomKey} file={f} color={textColor} styles={styles} />
-            ),
-          )}
-        {c && (c.t === 'text' || (c.t === 'file' && c.body)) ? (
-          <MarkdownText text={c.t === 'text' ? c.body : c.body!} color={textColor} theme={theme} />
-        ) : null}
-        <Text style={[styles.time, {color: textColor}]}>{msg.pending ? 'sending…' : time}</Text>
-      </Pressable>
-      {reactions && Object.keys(reactions).length > 0 && (
-        <View style={[styles.reactions, mine && styles.reactionsMine]}>
-          {Object.entries(reactions).map(([emoji, who]) => (
-            <Pressable
-              key={emoji}
-              style={[styles.reactionChip, who.includes(meId) && styles.reactionChipMine]}
-              onPress={() => onReact(emoji)}
-              accessibilityLabel={`${emoji} from ${who.map(nameOf).join(', ')}`}>
-              <Text style={styles.reactionText}>
-                {emoji} {who.length > 1 ? who.length : ''}
-              </Text>
-            </Pressable>
-          ))}
+    <View style={[styles.rowOuter, mine ? styles.rowOuterMine : null, grouped && styles.rowGrouped]}>
+      {!mine && (
+        <View style={styles.avatarCol}>
+          {lastInGroup && <Avatar roomKey={roomKey} member={msg.sender} name={name} size={28} />}
         </View>
       )}
-      {seenBy && seenBy.length > 0 && <Text style={styles.seen}>Seen by {seenBy.join(', ')}</Text>}
+      <View style={[styles.row, mine ? styles.rowMine : styles.rowTheirs]}>
+        {showName && <Text style={styles.senderName}>{name}</Text>}
+        <Pressable
+          style={[
+            styles.bubble,
+            mine ? styles.bubbleMine : styles.bubbleTheirs,
+            msg.pending && styles.bubblePending,
+            !c && styles.bubbleBroken,
+          ]}
+          onLongPress={onLongPress}
+          delayLongPress={300}>
+          {reply && (
+            <View style={[styles.quote, {borderLeftColor: mine ? theme.bubbleUserText : theme.primary}]}>
+              <Text style={[styles.quoteName, {color: textColor}]}>{nameOf(reply.sender)}</Text>
+              <Text style={[styles.quoteText, {color: textColor}]} numberOfLines={2}>
+                {reply.content?.t === 'text' ? reply.content.body : reply.content?.t === 'file' ? '📎 Attachment' : 'Message'}
+              </Text>
+            </View>
+          )}
+          {!c && <Text style={[styles.brokenText, {color: textColor}]}>🔒 {msg.error ?? 'Encrypted message'}</Text>}
+          {c?.t === 'file' &&
+            c.files.map(f =>
+              f.mime.startsWith('image/') ? (
+                <ImageAttachment key={f.blob} roomKey={roomKey} file={f} styles={styles} theme={theme} onOpen={onOpenImage} />
+              ) : (
+                <FileAttachment key={f.blob} roomKey={roomKey} file={f} color={textColor} styles={styles} />
+              ),
+            )}
+          {c && (c.t === 'text' || (c.t === 'file' && c.body)) ? (
+            <MarkdownText text={c.t === 'text' ? c.body : c.body!} color={textColor} theme={theme} />
+          ) : null}
+        </Pressable>
+        {(lastInGroup || msg.pending) && <Text style={styles.time}>{msg.pending ? 'sending…' : time}</Text>}
+        {reactions && Object.keys(reactions).length > 0 && (
+          <View style={[styles.reactions, mine && styles.reactionsMine]}>
+            {Object.entries(reactions).map(([emoji, who]) => (
+              <Pressable
+                key={emoji}
+                style={[styles.reactionChip, who.includes(meId) && styles.reactionChipMine]}
+                onPress={() => onReact(emoji)}
+                accessibilityLabel={`${emoji} from ${who.map(nameOf).join(', ')}`}>
+                <Text style={styles.reactionText}>
+                  {emoji} {who.length > 1 ? who.length : ''}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
+        {seenBy && seenBy.length > 0 && <Text style={styles.seen}>Seen by {seenBy.join(', ')}</Text>}
+      </View>
     </View>
   );
 });
@@ -673,7 +737,9 @@ function formatSize(n: number): string {
 function makeStyles(theme: Theme) {
   return StyleSheet.create({
     container: {flex: 1, backgroundColor: theme.bg},
-    center: {flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.bg},
+    center: {flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: theme.bg},
+    retryButton: {paddingHorizontal: 18, paddingVertical: 8, borderRadius: 8, backgroundColor: theme.surfaceAlt},
+    retryText: {color: theme.text, fontWeight: '600'},
     muted: {color: theme.textMuted},
     errorRow: {
       flexDirection: 'row',
@@ -705,7 +771,12 @@ function makeStyles(theme: Theme) {
       borderColor: theme.border,
     },
     startNoticeText: {flex: 1, fontSize: 12, color: theme.textMuted},
-    row: {maxWidth: '85%', marginTop: 4},
+    rowOuter: {flexDirection: 'row', alignItems: 'flex-end', gap: 6, marginTop: 10},
+    rowOuterMine: {justifyContent: 'flex-end'},
+    // Same sender within GROUP_MS: stack tightly, no repeated name or time.
+    rowGrouped: {marginTop: 2},
+    avatarCol: {width: 28, marginBottom: 16},
+    row: {maxWidth: '80%', flexShrink: 1},
     rowMine: {alignSelf: 'flex-end', alignItems: 'flex-end'},
     rowTheirs: {alignSelf: 'flex-start', alignItems: 'flex-start'},
     senderName: {fontSize: 11, fontWeight: '700', color: theme.textMuted, marginBottom: 2, marginLeft: 4},
@@ -716,7 +787,7 @@ function makeStyles(theme: Theme) {
     bubblePending: {opacity: 0.7, borderWidth: 1, borderStyle: 'dashed', borderColor: theme.textMuted},
     bubbleBroken: {opacity: 0.8},
     brokenText: {fontStyle: 'italic', fontSize: 13, color: theme.textMuted},
-    time: {fontSize: 10, opacity: 0.6, alignSelf: 'flex-end', marginTop: -2},
+    time: {fontSize: 10, color: theme.textMuted, marginTop: 3, marginHorizontal: 4},
     quote: {borderLeftWidth: 3, paddingLeft: 8, opacity: 0.85},
     quoteName: {fontSize: 11, fontWeight: '700'},
     quoteText: {fontSize: 12},

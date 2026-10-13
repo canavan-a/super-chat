@@ -60,9 +60,14 @@ func Sweep(svc *rooms.Service) (int64, error) {
 		total += res.RowsAffected
 	}
 
-	// Blobs uploaded but never attached to a message.
+	// Blobs uploaded but never attached to a message or made an avatar, and
+	// avatars of people who have left the room.
 	var orphans []string
-	db.Model(&database.Blob{}).Where("message_id IS NULL AND created_at < ?", now.Add(-orphanBlobAge).UnixMilli()).Pluck("id", &orphans)
+	db.Model(&database.Blob{}).Where("message_id IS NULL AND avatar = 0 AND created_at < ?", now.Add(-orphanBlobAge).UnixMilli()).Pluck("id", &orphans)
+	var gone []string
+	db.Raw(`SELECT b.id FROM blobs b WHERE b.avatar = 1
+		AND NOT EXISTS (SELECT 1 FROM members m WHERE m.room_id = b.room_id AND m.member_id = b.uploader)`).Scan(&gone)
+	orphans = append(orphans, gone...)
 	if len(orphans) > 0 {
 		if err := db.Where("id IN ?", orphans).Delete(&database.Blob{}).Error; err != nil {
 			return total, err

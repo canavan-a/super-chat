@@ -84,6 +84,23 @@ export async function saveFileAs(
 export const saveTextFileAs = (name: string, makeText: () => Promise<string>): Promise<SavedFile | null> =>
   saveFileAs(name, 'application/json', async () => utf8(await makeText()));
 
+/** A profile picture: one image, scaled down to 512px and re-encoded as JPEG (which also strips EXIF). Null if cancelled. */
+export async function pickAvatar(): Promise<Uint8Array | null> {
+  const res = await launchImageLibrary({
+    mediaType: 'photo',
+    selectionLimit: 1,
+    maxWidth: 512,
+    maxHeight: 512,
+    quality: 0.8,
+    includeBase64: true,
+  });
+  if (res.didCancel) return null;
+  if (res.errorMessage) throw new Error(res.errorMessage);
+  const a = res.assets?.[0];
+  if (a?.uri?.startsWith('file://')) RNFS.unlink(a.uri.replace('file://', '')).catch(() => {});
+  return a?.base64 ? base64.decode(a.base64) : null;
+}
+
 export async function pickImages(): Promise<PickedFile[]> {
   const res = await launchImageLibrary({
     mediaType: 'photo',

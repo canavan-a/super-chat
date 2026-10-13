@@ -6,8 +6,8 @@ import {describe, expect, it} from '@jest/globals';
 import palette from '../src/logo/iconPalette.json';
 import {LOGO} from '../src/logo/logoData';
 import {hexToRgb, isLightTheme, shineColor, shineTarget, themeAccent, themeRamp, toneColor} from '../src/logo/logoTheme';
-import {SPLASH_TIMING, SPLASH_TOTAL, dotsPassAt, pulseRange} from '../src/logo/SplashScreen';
-import {MARK_STRIPS, SHINE_STRIPS, STRIP_SPANS, WORD_STRIPS, WORD_TONES, mergeTones, sliceTones} from '../src/logo/LogoArt';
+import {SPLASH_TIMING, SPLASH_TOTAL, pulseRange} from '../src/logo/SplashScreen';
+import {SHINE_STRIPS, STRIP_SPANS, WORD_STRIPS, WORD_TONES, sliceTones} from '../src/logo/LogoArt';
 import {DEFAULT_ICON, wantedIcon} from '../src/appIcon';
 import {THEME_OPTIONS, THEMES} from '../src/theme';
 
@@ -142,13 +142,11 @@ describe('shine strips', () => {
     });
   });
 
-  it('together hold exactly the badger\'s, the eye\'s and the wordmark\'s pixels (nothing lost, nothing doubled)', () => {
-    const badger = inkOf(mergeTones(LOGO.mark.tones, LOGO.dots.tones));
+  it('together hold exactly the wordmark\'s pixels (nothing lost, nothing doubled)', () => {
     const word = inkOf(WORD_TONES);
-    expect(inkOf(MARK_STRIPS.flatMap(s => s.tones))).toBe(badger);
     expect(inkOf(WORD_STRIPS.flatMap(s => s.tones))).toBe(word);
     // and each strip's runs stay inside its own columns
-    for (const s of [...MARK_STRIPS, ...WORD_STRIPS]) {
+    for (const s of WORD_STRIPS) {
       for (const t of s.tones) {
         for (let i = 0; i < t.runs.length; i += 3) {
           expect(t.runs[i]).toBeGreaterThanOrEqual(s.x0);
@@ -177,19 +175,13 @@ describe('shine strips', () => {
     }
   });
 
-  it('sweep left to right, and reach the eye during the sweep', () => {
+  it('sweep left to right', () => {
     let last = -1;
     for (let i = 0; i < SHINE_STRIPS; i++) {
       const [, c] = pulseRange(i, SHINE_STRIPS, 0);
       expect(c).toBeGreaterThan(last);
       last = c;
     }
-    const at = dotsPassAt();
-    expect(at).toBeGreaterThan(0);
-    expect(at).toBeLessThan(1);
-    // the strip over the eye peaks at about the same time as the eye's glint
-    const eyeStrip = STRIP_SPANS.findIndex(s => LOGO.dots.cx >= s.x0 && LOGO.dots.cx < s.x1);
-    expect(Math.abs(pulseRange(eyeStrip, SHINE_STRIPS, 0)[1] - at)).toBeLessThan(0.88 / (SHINE_STRIPS - 1));
   });
 });
 
@@ -199,7 +191,6 @@ describe('splash timeline', () => {
     const lettersDone = T.letterStart + (LOGO.word.slices.length - 1) * T.letterStagger + T.letterDur;
     expect(lettersDone).toBeLessThanOrEqual(T.shineStart);
     expect(T.shineStart + T.shineDur).toBeLessThanOrEqual(T.hold);
-    expect(T.markIn).toBeLessThanOrEqual(T.shineStart);
   });
   it('is short enough not to be annoying', () => {
     expect(SPLASH_TOTAL).toBeLessThanOrEqual(3000);

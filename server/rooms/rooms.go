@@ -161,6 +161,7 @@ func (s *Service) Append(room string, b Batch, r Rules) (*proto.State, error) {
 	var invite *proto.InvitePub
 	var joinInvite string
 	var deletes []proto.DeletePub
+	wipe := false
 	for i, se := range b.Events {
 		e, err := proto.ParseEvent(se)
 		if err != nil {
@@ -207,6 +208,8 @@ func (s *Service) Append(room string, b Batch, r Rules) (*proto.State, error) {
 			var p proto.DeletePub
 			_ = json.Unmarshal(e.Pub, &p)
 			deletes = append(deletes, p)
+		case "wipe":
+			wipe = true
 		}
 		evs = append(evs, e)
 	}
@@ -281,6 +284,26 @@ func (s *Service) Append(room string, b Batch, r Rules) (*proto.State, error) {
 			if err := tx.Create(&database.InviteUse{InviteID: joinInvite, RoomID: room, MemberID: r.Caller, UsedAt: now}).Error; err != nil {
 				return err
 			}
+		}
+		if wipe {
+			// Every message so far, and its attachments; avatars aren't
+			// attached to messages and stay.
+			var ids []string
+			if err := tx.Model(&database.Message{}).Where("room_id = ?", room).Pluck("id", &ids).Error; err != nil {
+				return err
+			}
+			var blobs []string
+			if err := tx.Model(&database.Blob{}).Where("room_id = ? AND message_id IS NOT NULL", room).Pluck("id", &blobs).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("room_id = ? AND message_id IS NOT NULL", room).Delete(&database.Blob{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("room_id = ?", room).Delete(&database.Message{}).Error; err != nil {
+				return err
+			}
+			deletedIDs = append(deletedIDs, ids...)
+			deletedBlobs = append(deletedBlobs, blobs...)
 		}
 		for _, d := range deletes {
 			res := tx.Where("room_id = ? AND id = ? AND sender = ?", room, d.Msg, d.Sender).Delete(&database.Message{})

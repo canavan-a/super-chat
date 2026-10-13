@@ -367,6 +367,13 @@ func (s *State) Apply(e *Event, now int64) error {
 			return errors.New("only the sender or an admin can delete")
 		}
 
+	case "wipe":
+		// Deletes every message so far, for everyone. The event itself stays
+		// in the log, so the room shows who wiped it and when.
+		if !s.isAdmin(author) {
+			return errors.New("only admins can wipe the chat")
+		}
+
 	default:
 		return fmt.Errorf("unknown event kind %q", e.Kind)
 	}

@@ -19,8 +19,13 @@ export interface Settings {
   // new messages notify while the app is in the background. Opt-in, since
   // it's a real foreground service with a persistent notification.
   bgNotifications: boolean;
-  // Show the decrypted text in notifications. Off shows only the room name.
+  // Show the sender and decrypted text in notifications. Off shows only the
+  // room name and "New message". The lock screen hides it either way (the
+  // channel is private).
   notifPreviews: boolean;
+  // One-time switch of notifPreviews to on for installs from before it was
+  // the default.
+  previewsDefaultOn: boolean;
   // Minutes in the background before the app asks for biometrics again.
   // 0 = every time it's reopened.
   lockAfterMin: number;
@@ -44,7 +49,8 @@ const DEFAULT_SETTINGS: Settings = {
   displayName: '',
   themeName: 'dark',
   bgNotifications: false,
-  notifPreviews: false,
+  notifPreviews: true,
+  previewsDefaultOn: true,
   lockAfterMin: 1,
   themedIcon: true,
   launchSplash: true,
@@ -66,7 +72,9 @@ async function load(): Promise<Settings> {
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
     if (raw) {
-      current = {...DEFAULT_SETTINGS, ...JSON.parse(raw)};
+      const saved = JSON.parse(raw);
+      current = {...DEFAULT_SETTINGS, ...saved};
+      if (!saved.previewsDefaultOn) current = {...current, notifPreviews: true, previewsDefaultOn: true};
     }
   } catch {
     // fall back to defaults — a corrupt/missing value shouldn't crash startup

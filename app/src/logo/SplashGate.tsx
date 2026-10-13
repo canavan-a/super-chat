@@ -4,6 +4,7 @@ import {StyleSheet, View} from 'react-native';
 import {settingsStore} from '../settings';
 import {useTheme} from '../theme';
 import {SplashScreen} from './SplashScreen';
+import {splashHold} from './splashHold';
 
 // Plays the launch splash over the app, once per process. The app renders
 // underneath from the start (so it's ready the moment the splash lifts); the
@@ -44,6 +45,8 @@ export class SplashBoundary extends React.Component<{onFail: () => void; childre
 export function SplashGate({children}: {children: React.ReactNode}): React.JSX.Element {
   const theme = useTheme();
   const [phase, setPhase] = useState<Phase>(played ? 'done' : 'wait');
+  const [hold, setHold] = useState(splashHold.get());
+  useEffect(() => splashHold.subscribe(setHold), []);
 
   useEffect(() => {
     if (phase !== 'wait') return;
@@ -87,6 +90,7 @@ export function SplashGate({children}: {children: React.ReactNode}): React.JSX.E
           }}>
           <SplashScreen
             theme={theme}
+            hold={hold}
             onDone={() => {
               // It got to the end: clear the strike.
               settingsStore.save({...settingsStore.get(), splashStrikes: 0}).catch(() => {});

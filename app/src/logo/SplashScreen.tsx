@@ -2,14 +2,13 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {AccessibilityInfo, Animated, Easing, Platform, Pressable, StyleSheet, View, useWindowDimensions} from 'react-native';
 
 import type {Theme} from '../theme';
-import {MARK_H, MARK_STRIPS, LOGO_H, LOGO_W, PIXEL_W, SHINE_STRIPS, ToneLayer, WORD_H, WORD_STRIPS, WORD_TOP} from './LogoArt';
+import {LOGO_H, LOGO_W, PIXEL_W, SHINE_STRIPS, ToneLayer, WORD_H, WORD_STRIPS} from './LogoArt';
 import {LOGO, ToneRuns} from './logoData';
 import {shineColor, toneColor} from './logoTheme';
 
-// The launch screen, the same animation as super-badger's with the chat
-// bubble in the badger's place, recolored for the current theme. The bubble settles into place, the
-// letters rise in one after another, then a shine sweeps across the whole logo
-// and lights the bubble's typing dots on the way.
+// The launch screen: the stacked "Super Chat" wordmark (the launcher icon's),
+// recolored for the current theme. The letters rise in one after another, then
+// a shine sweeps across.
 //
 // Everything animated is an opacity or a translate/scale on the native driver,
 // and nothing else: no skew, no clipping, no layers moving against each other.
@@ -21,11 +20,10 @@ import {shineColor, toneColor} from './logoTheme';
 
 /** Timeline, in milliseconds. */
 export const SPLASH_TIMING = {
-  markIn: 720,
-  letterStart: 300,
+  letterStart: 120,
   letterStagger: 42,
   letterDur: 380,
-  shineStart: 1150,
+  shineStart: 950,
   shineDur: 950,
   hold: 2350, // when the exit fade begins
   exit: 350,
@@ -36,9 +34,6 @@ const SHINE_STRENGTH = 0.7;
 
 /** How bright the highlight gets on the strip the sweep is over (its opacity). */
 const SHINE_PEAK = 0.55;
-
-/** The wordmark's part of the sweep trails the bubble's a little, which reads as a diagonal. */
-const WORD_LAG = 0.05;
 
 /** Total running time. */
 export const SPLASH_TOTAL = SPLASH_TIMING.hold + SPLASH_TIMING.exit;
@@ -53,21 +48,17 @@ export function pulseRange(i: number, n: number, lag: number): [number, number, 
   return [Math.max(0, c - 0.13), c, Math.min(1, c + 0.13)];
 }
 
-/** The shine's progress at which the sweep is over the typing dots. */
-export function dotsPassAt(): number {
-  const c = 0.06 + 0.88 * (LOGO.dots.cx / LOGO.width);
-  return c;
-}
-
 interface Props {
   theme: Theme;
   /** called when the splash has finished (or was tapped away) */
   onDone: () => void;
   /** skip the motion: hold the logo briefly, then fade */
   reduceMotion?: boolean;
+  /** the app is still loading: stay up past the timeline until this goes false */
+  hold?: boolean;
 }
 
-export function SplashScreen({theme, onDone, reduceMotion}: Props): React.JSX.Element {
+export function SplashScreen({theme, onDone, reduceMotion, hold = false}: Props): React.JSX.Element {
   const {width: screenW, height: screenH} = useWindowDimensions();
   // The stacked logo is tall and narrow, so height is usually the limit.
   const W = Math.min(screenW * 0.9, 480, (screenH * 0.7 * LOGO_W) / LOGO_H);
@@ -91,14 +82,12 @@ export function SplashScreen({theme, onDone, reduceMotion}: Props): React.JSX.El
   // Created once. (useRef({...}) would build a fresh set of Animated.Values on
   // every render and throw all but the first away.)
   const values = useRef<{
-    mark: Animated.Value;
     letters: Animated.Value[];
     shine: Animated.Value;
     exit: Animated.Value;
   } | null>(null);
   if (!values.current) {
     values.current = {
-      mark: new Animated.Value(reduce ? 1 : 0),
       letters: LOGO.word.slices.map(() => new Animated.Value(reduce ? 1 : 0)),
       shine: new Animated.Value(0),
       exit: new Animated.Value(1),
@@ -124,64 +113,95 @@ export function SplashScreen({theme, onDone, reduceMotion}: Props): React.JSX.El
     Animated.timing(v.exit, {toValue: 0, duration: 160, easing: Easing.linear, useNativeDriver: useNative}).start(done);
   };
 
+  const timing = (val: Animated.Value, to: number, duration: number, delay: number, easing = Easing.out(Easing.cubic)) =>
+    Animated.timing(val, {toValue: to, duration, delay, easing, useNativeDriver: useNative});
+
+  // After the intro the splash fades out, unless the app is still loading
+  // behind it (`hold`): then the shine keeps sweeping, as the loading
+  // indicator, until it lets go. Refs, not state, so the fade starts in the
+  // same tick the intro ends.
+  const holdRef = useRef(hold);
+  holdRef.current = hold;
+  const introDone = useRef(false);
+  const exiting = useRef(false);
+  const exitNow = () => {
+    if (exiting.current || skipping.current) return;
+    exiting.current = true;
+    running.current?.stop();
+    const T = SPLASH_TIMING;
+    const exit = reduce ? timing(v.exit, 0, 200, 0, Easing.linear) : timing(v.exit, 0, T.exit, 0, Easing.in(Easing.quad));
+    running.current = exit;
+    exit.start(r => r.finished && done());
+  };
+  const afterIntro = () => {
+    introDone.current = true;
+    if (!holdRef.current) return exitNow();
+    if (reduce) return; // just stay put
+    const T = SPLASH_TIMING;
+    v.shine.setValue(0);
+    const loop = Animated.loop(
+      Animated.sequence([timing(v.shine, 1, T.shineDur, 0, Easing.inOut(Easing.quad)), Animated.delay(250)]),
+    );
+    running.current = loop;
+    loop.start();
+  };
+
+  // The intro: letters in, one shine, then the rest of the hold time.
   useEffect(() => {
     const T = SPLASH_TIMING;
-    const timing = (val: Animated.Value, to: number, duration: number, delay: number, easing = Easing.out(Easing.cubic)) =>
-      Animated.timing(val, {toValue: to, duration, delay, easing, useNativeDriver: useNative});
-
     const animation = reduce
-      ? Animated.sequence([Animated.delay(600), timing(v.exit, 0, 200, 0, Easing.linear)])
+      ? Animated.delay(600)
       : Animated.parallel([
-          timing(v.mark, 1, T.markIn, 0),
           ...v.letters.map((l, i) => timing(l, 1, T.letterDur, T.letterStart + i * T.letterStagger)),
           timing(v.shine, 1, T.shineDur, T.shineStart, Easing.inOut(Easing.quad)),
-          Animated.sequence([Animated.delay(T.hold), timing(v.exit, 0, T.exit, 0, Easing.in(Easing.quad))]),
+          Animated.delay(T.hold),
         ]);
     running.current = animation;
-    animation.start(r => r.finished && done());
+    animation.start(r => r.finished && afterIntro());
     return () => {
+      running.current?.stop();
       running.current = null;
-      animation.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reduce]);
+
+  // Loading finished while the splash was holding: fade out now.
+  useEffect(() => {
+    if (!hold && introDone.current) exitNow();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hold]);
 
   // colors for this theme
   const base = useMemo(() => (t: ToneRuns) => toneColor(theme, t.u, t.w), [theme]);
   const glint = useMemo(() => (t: ToneRuns) => shineColor(toneColor(theme, t.u, t.w), theme, SHINE_STRENGTH), [theme]);
 
   // The shine's opacities, built once so their native nodes aren't recreated.
-  const fades = useMemo(() => {
-    const pulse = (range: [number, number, number], peak: number) =>
-      v.shine.interpolate({inputRange: range, outputRange: [0, peak, 0], extrapolate: 'clamp'});
-    const at = dotsPassAt();
-    return {
-      mark: MARK_STRIPS.map((_, i) => pulse(pulseRange(i, SHINE_STRIPS, 0), SHINE_PEAK)),
-      word: WORD_STRIPS.map((_, i) => pulse(pulseRange(i, SHINE_STRIPS, WORD_LAG), SHINE_PEAK)),
-      dots: pulse([Math.max(0, at - 0.09), at, Math.min(1, at + 0.13)], 1),
-    };
-  }, [v]);
+  const fades = useMemo(
+    () =>
+      WORD_STRIPS.map((_, i) =>
+        v.shine.interpolate({inputRange: pulseRange(i, SHINE_STRIPS, 0), outputRange: [0, SHINE_PEAK, 0], extrapolate: 'clamp'}),
+      ),
+    [v],
+  );
 
-  const markH = MARK_H * scale;
-  const wordTop = WORD_TOP * scale;
   const wordH = WORD_H * scale;
 
-  const strips = (list: typeof MARK_STRIPS, opacities: Animated.AnimatedInterpolation<number>[], top: number, height: number, regionH: number, key: string) =>
-    list.map((s, i) =>
+  const strips = () =>
+    WORD_STRIPS.map((s, i) =>
       s.tones.length === 0 ? null : (
         <Animated.View
-          key={`${key}${i}`}
+          key={`w${i}`}
           pointerEvents="none"
           style={[
             styles.abs,
-            {left: s.x0 * PIXEL_W * scale, top, width: (s.x1 - s.x0) * PIXEL_W * scale, height, opacity: opacities[i]},
+            {left: s.x0 * PIXEL_W * scale, top: 0, width: (s.x1 - s.x0) * PIXEL_W * scale, height: wordH, opacity: fades[i]},
           ]}>
           <ToneLayer
             tones={s.tones}
             fill={glint}
-            view={[s.x0 * PIXEL_W, 0, (s.x1 - s.x0) * PIXEL_W, regionH]}
+            view={[s.x0 * PIXEL_W, 0, (s.x1 - s.x0) * PIXEL_W, WORD_H]}
             width={(s.x1 - s.x0) * PIXEL_W * scale}
-            height={height}
+            height={wordH}
           />
         </Animated.View>
       ),
@@ -191,32 +211,14 @@ export function SplashScreen({theme, onDone, reduceMotion}: Props): React.JSX.El
     <Animated.View style={[StyleSheet.absoluteFill, {backgroundColor: theme.bg, opacity: v.exit}]} accessible accessibilityLabel="Super Chat">
       <Pressable style={styles.center} onPress={skip} accessibilityRole="button" accessibilityLabel="Skip intro">
         <View style={{width: W, height: H}}>
-          <Animated.View
-            style={[
-              styles.abs,
-              {width: W, height: markH, opacity: v.mark},
-              {
-                transform: [
-                  {translateY: v.mark.interpolate({inputRange: [0, 1], outputRange: [16, 0]})},
-                  {scale: v.mark.interpolate({inputRange: [0, 1], outputRange: [0.94, 1]})},
-                ],
-              },
-            ]}>
-            <ToneLayer tones={LOGO.mark.tones} fill={base} view={[0, 0, LOGO_W, MARK_H]} width={W} height={markH} />
-            <ToneLayer tones={LOGO.dots.tones} fill={base} view={[0, 0, LOGO_W, MARK_H]} width={W} height={markH} />
-            <Animated.View style={[styles.abs, {width: W, height: markH, opacity: fades.dots}]}>
-              <ToneLayer tones={LOGO.dots.tones} fill={glint} view={[0, 0, LOGO_W, MARK_H]} width={W} height={markH} />
-            </Animated.View>
-          </Animated.View>
-
           {LOGO.word.slices.map((s, i) => (
             <Animated.View
-              key={s.x0}
+              key={i}
               style={[
                 styles.abs,
                 {
                   left: s.x0 * PIXEL_W * scale,
-                  top: wordTop,
+                  top: 0,
                   width: (s.x1 - s.x0) * PIXEL_W * scale,
                   height: wordH,
                   opacity: v.letters[i],
@@ -235,8 +237,7 @@ export function SplashScreen({theme, onDone, reduceMotion}: Props): React.JSX.El
 
           {!reduce && (
             <View style={[styles.abs, {width: W, height: H}]} pointerEvents="none">
-              {strips(MARK_STRIPS, fades.mark, 0, markH, MARK_H, 'b')}
-              {strips(WORD_STRIPS, fades.word, wordTop, wordH, WORD_H, 'w')}
+              {strips()}
             </View>
           )}
         </View>

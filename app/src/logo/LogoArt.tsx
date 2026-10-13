@@ -12,12 +12,11 @@ import {useTheme} from '../theme';
 export const PIXEL_W = 3;
 export const PIXEL_H = 4;
 
-/** Overall logo size in viewBox units. */
+/** Overall logo size in viewBox units: the stacked wordmark alone. (The
+ * bubble in logoData only feeds the notification icon now.) */
 export const LOGO_W = LOGO.width * PIXEL_W;
-export const MARK_H = LOGO.mark.rows * PIXEL_H;
-export const WORD_TOP = (LOGO.mark.rows + LOGO.gap) * PIXEL_H;
 export const WORD_H = LOGO.word.rows * PIXEL_H;
-export const LOGO_H = WORD_TOP + WORD_H;
+export const LOGO_H = WORD_H;
 
 // Adjacent rectangles overlap by a hair so no seams show between pixels when
 // the logo is scaled to a fractional size.
@@ -82,8 +81,7 @@ export const STRIP_SPANS: {x0: number; x1: number}[] = Array.from({length: SHINE
   x1: Math.round(((i + 1) * LOGO.width) / SHINE_STRIPS),
 }));
 
-/** Each strip's share of the bubble (with its dots) and of the wordmark. */
-export const MARK_STRIPS = STRIP_SPANS.map(s => ({...s, tones: sliceTones(mergeTones(LOGO.mark.tones, LOGO.dots.tones), s.x0, s.x1)}));
+/** Each strip's share of the wordmark. */
 export const WORD_STRIPS = STRIP_SPANS.map(s => ({...s, tones: sliceTones(WORD_TONES, s.x0, s.x1)}));
 
 // Every layer sits at the origin of its container and overlays its siblings.
@@ -122,19 +120,11 @@ interface FullProps {
   height: number;
 }
 
-/** The whole logo (bubble, dots and wordmark) in one SVG. */
+/** The whole logo (the stacked wordmark) in one SVG. */
 export const FullLogo = memo(function FullLogo({fill, width, height}: FullProps) {
   return (
     <Svg style={styles.layer} width={width} height={height} viewBox={`0 0 ${LOGO_W} ${LOGO_H}`}>
       <G>
-        {LOGO.mark.tones.map(t => (
-          <Path key={`b${t.u}/${t.w}`} d={tonePath(t)} fill={fill(t)} />
-        ))}
-        {LOGO.dots.tones.map(t => (
-          <Path key={`e${t.u}/${t.w}`} d={tonePath(t)} fill={fill(t)} />
-        ))}
-      </G>
-      <G transform={`translate(0 ${WORD_TOP})`}>
         {WORD_TONES.map(t => (
           <Path key={`w${t.u}/${t.w}`} d={tonePath(t)} fill={fill(t)} />
         ))}

@@ -153,4 +153,7 @@ export const api = {
     }
   },
   putVault: (server: string, k: VaultKeys, blob: string) => request<void>(server, 'PUT', `/v1/vault/${k.id}`, k.signer, {blob}),
+  /** Marks an uploaded blob as my profile picture in this room ("" clears it). */
+  setAvatar: (server: string, room: string, by: Signer, blob: string) =>
+    request<void>(server, 'PUT', `/v1/rooms/${room}/avatar`, by, {blob}),
 };

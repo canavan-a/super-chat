@@ -133,7 +133,7 @@ stores and serves the bytes unchanged.
 | `create` | anyone (seq 0 only)          | `{retentionDays, x25519}`                             | author becomes admin |
 | `epoch`  | a member who is admin, or anyone while `pendingRotation` | `{epoch: n+1, recipients:[ids], commit: b64}` | new key. `recipients` must equal the current members exactly (sorted) |
 | `meta`   | admin                        | `{}` (name/color in `enc`)                            | room name and color |
-| `profile`| member, about themselves     | `{}` (displayName in `enc`)                           | display name |
+| `profile`| member, about themselves     | `{}` (displayName, avatar in `enc`)                   | display name, picture |
 | `settings`| admin                       | `{retentionDays}` (0 = keep forever, max 3650)        | |
 | `invite` | admin                        | `{id, key: b64 ed25519 pub, expiresAt, maxUses}` (0 = unlimited) | creates the invite |
 | `revoke` | admin                        | `{id}`                                                | `invites[id].revoked = true` |
@@ -142,6 +142,7 @@ stores and serves the bytes unchanged.
 | `kick`   | admin                        | `{target}` (must be a member other than the author)   | removes the target, `pendingRotation` |
 | `leave`  | member                       | `{}`                                                  | removes the author, `pendingRotation` |
 | `delete` | the message's sender, or an admin | `{msg: id, sender: id}`                          | the server hard-deletes it. Clients check that `sender` is the message's signed inner sender, or that the author is an admin |
+| `wipe`   | admin                        | `{}`                                                  | the server hard-deletes every message in the room so far, with its attachments (not avatars). The event stays, so clients show who wiped the chat and when; a client that sees a wipe it hasn't handled drops what it holds and reloads |
 
 A **join** is valid only when:
 - the invite exists, isn't revoked, and
@@ -207,6 +208,16 @@ The content is one of:
 `GET /v1/rooms/:id/blobs/:blob`. The bytes are `aead(fileKey, file, "sc-blob")`.
 A blob that no message references within an hour is swept.
 
+**Profile pictures**: a member uploads the sealed picture as a blob, then
+`PUT /v1/rooms/:id/avatar {"blob": id}` marks it as theirs (`""` clears it). An
+avatar blob is readable by every member, is kept by the sweeper while its
+uploader is in the room, and is replaced (deleted) by the next one. The key
+travels in the member's `profile` event: `enc.avatar = {blob, key, at}` (`null`
+= removed; absent = unchanged), so the server knows which blob is someone's
+picture but never sees it. A new picture is always a new blob, so clients
+cache by blob id and refetch only when the profile points somewhere new. `at`
+is when it was set; a device only replaces a picture newer than its own.
+
 Members only ever see messages and envelopes from epochs at or after their
 first one.
 
@@ -215,7 +226,8 @@ first one.
 `retentionDays` comes from the log. Every hour the server deletes messages
 older than that, along with their blobs. Clients drop them from memory by the
 same rule. A `delete` event hard-deletes the message row and its blobs, and
-every client is told over WebSocket.
+every client is told over WebSocket. A `wipe` event does the same for every
+message in the room up to it.
 
 ## WebSocket events (server → client)
 

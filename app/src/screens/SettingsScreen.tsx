@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Clipboard,
+  Image,
   Linking,
   Platform,
   Pressable,
@@ -25,13 +26,13 @@ import {
   runUpdate,
 } from '../appUpdater';
 import {exportKeyFile, phraseFromEntropy} from '../crypto';
-import {saveTextFileAs} from '../files';
+import {dataUri, pickAvatar, saveTextFileAs} from '../files';
 import {Notice} from '../components/Notice';
 import {forgetIdentity, loadIdentity, NEEDS_PASSPHRASE} from '../keystore';
 import {platformConfirm} from '../platformConfirm';
 import {session} from '../session';
 import {DEFAULT_SERVER, normalizeServer, settingsStore} from '../settings';
-import {resetStore} from '../store';
+import {getMyAvatar, resetStore, setMyAvatar, useStore} from '../store';
 import {THEME_OPTIONS, Theme, useThemeSetting} from '../theme';
 
 type SettingsTab = 'general' | 'account';
@@ -185,6 +186,31 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
     {kind: 'working'} | {kind: 'saved'; name: string; location: string} | {kind: 'error'; message: string} | null
   >(null);
   const [keyBusy, setKeyBusy] = useState(false);
+
+  // ---- profile picture ----
+  const myAvatar = useStore(getMyAvatar);
+  const myAvatarUri = myAvatar ? dataUri('image/jpeg', myAvatar) : null;
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+  const updateAvatar = async (jpeg: Uint8Array | null) => {
+    setAvatarBusy(true);
+    setAvatarError(null);
+    try {
+      await setMyAvatar(jpeg);
+    } catch (e) {
+      setAvatarError((e as Error).message);
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
+  const chooseAvatar = async () => {
+    try {
+      const jpeg = await pickAvatar();
+      if (jpeg) await updateAvatar(jpeg);
+    } catch (e) {
+      setAvatarError((e as Error).message);
+    }
+  };
   const [webPass, setWebPass] = useState('');
 
   // Showing the phrase asks for biometrics (or the passphrase) again: a
@@ -414,6 +440,30 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
           <Text style={styles.mono}>{me?.id.slice(0, 12)}</Text>
           <Text style={styles.hint}>A local fingerprint, to tell accounts apart on this device. It isn't sent anywhere.</Text>
 
+          <Text style={[styles.label, styles.spaced]}>Profile picture</Text>
+          <View style={styles.avatarRow}>
+            {myAvatarUri ? (
+              <Image source={{uri: myAvatarUri}} style={styles.avatarPreview} />
+            ) : (
+              <View style={[styles.avatarPreview, styles.avatarEmpty]}>
+                <Text style={styles.hint}>None</Text>
+              </View>
+            )}
+            <Pressable style={[styles.testButton, avatarBusy && styles.buttonDisabled]} disabled={avatarBusy} onPress={chooseAvatar}>
+              {avatarBusy ? <ActivityIndicator size="small" color={theme.text} /> : <Text style={styles.testButtonText}>Choose…</Text>}
+            </Pressable>
+            {myAvatarUri && !avatarBusy && (
+              <Pressable style={styles.testButton} onPress={() => updateAvatar(null)}>
+                <Text style={styles.testButtonText}>Remove</Text>
+              </Pressable>
+            )}
+          </View>
+          <Text style={styles.hint}>
+            Shown in every room you're in. Each room gets its own encrypted copy, so it doesn't link your rooms
+            together.
+          </Text>
+          {avatarError && <Text style={styles.fieldError}>{avatarError}</Text>}
+
           <View style={styles.field}>
             <Text style={[styles.label, styles.spaced]}>Default display name</Text>
             <TextInput
@@ -612,6 +662,10 @@ function makeStyles(theme: Theme) {
       fontWeight: '600',
       color: theme.text,
     },
+    avatarRow: {flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 6},
+    avatarPreview: {width: 56, height: 56, borderRadius: 28},
+    avatarEmpty: {alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: theme.border},
+    fieldError: {color: theme.danger, fontSize: 12, marginTop: 4},
     buttonDisabled: {
       opacity: 0.5,
     },

@@ -78,3 +78,18 @@ export async function pickFiles(): Promise<PickedFile[]> {
 export function dataUri(mime: string, data: Uint8Array): string {
   return `data:${mime};base64,${base64.encode(data)}`;
 }
+
+/** A profile picture: one image, scaled down to 512px and re-encoded as JPEG. Null if cancelled. */
+export async function pickAvatar(): Promise<Uint8Array | null> {
+  const [f] = await pick('image/*', false);
+  if (!f) return null;
+  const img = await createImageBitmap(f);
+  const scale = Math.min(1, 512 / Math.max(img.width, img.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(img.width * scale);
+  canvas.height = Math.round(img.height * scale);
+  canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/jpeg', 0.85));
+  if (!blob) throw new Error("Couldn't read that image.");
+  return new Uint8Array(await blob.arrayBuffer());
+}

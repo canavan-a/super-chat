@@ -3,6 +3,7 @@ import {ActivityIndicator, Clipboard, Pressable, ScrollView, Share, StyleSheet, 
 
 import type {HeaderInfo} from '../App';
 import {fingerprint} from '../crypto';
+import {Avatar} from '../components/Avatar';
 import {Icon} from '../components/Icon';
 import {platformConfirm} from '../platformConfirm';
 import {Route} from '../routes';
@@ -18,6 +19,7 @@ import {
   setRetention,
   setRole,
   useStore,
+  wipeChat,
 } from '../store';
 import {Theme, useTheme} from '../theme';
 
@@ -205,6 +207,7 @@ export function RoomSettingsScreen({
       <Section title={`Members (${view.members.length})`} styles={styles}>
         {view.members.map(m => (
           <View key={m.id} style={styles.memberRow}>
+            <Avatar roomKey={roomKey} member={m.id} name={m.name} size={34} />
             <View style={styles.flex}>
               <Text style={styles.rowTitle}>
                 {m.name ?? 'Unnamed'}
@@ -305,6 +308,25 @@ export function RoomSettingsScreen({
         </Text>
         <Text style={styles.help}>Server: {room.server}</Text>
       </Section>
+
+      {isAdmin && (
+        <Pressable
+          style={[styles.leaveButton, styles.wipeButton]}
+          onPress={() =>
+            platformConfirm(
+              'Wipe chat history?',
+              'Every message and attachment in this room is deleted for everyone, permanently. Members, settings and invite links stay. The chat will show that you wiped it.',
+              'Wipe',
+              () =>
+                run('wipe', async () => {
+                  await wipeChat(roomKey);
+                  onNavigate({name: 'room', key: roomKey});
+                }),
+            )
+          }>
+          <Text style={styles.leaveText}>Wipe chat history</Text>
+        </Pressable>
+      )}
 
       <Pressable
         style={[styles.leaveButton]}
@@ -432,10 +454,11 @@ function makeStyles(theme: Theme) {
     smallButtonText: {fontSize: 12, fontWeight: '600', color: theme.text},
     dangerButton: {paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, backgroundColor: theme.dangerBg},
     dangerButtonText: {fontSize: 12, fontWeight: '700', color: theme.danger},
-    swatches: {flexDirection: 'row', gap: 10, marginTop: 10},
+    swatches: {flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10},
     swatch: {width: 28, height: 28, borderRadius: 14, borderWidth: 2, borderColor: 'transparent'},
     swatchOn: {borderColor: theme.text},
     leaveButton: {paddingVertical: 12, borderRadius: 8, backgroundColor: theme.dangerBg, alignItems: 'center'},
     leaveText: {color: theme.danger, fontWeight: '700'},
+    wipeButton: {marginBottom: 10},
   });
 }
