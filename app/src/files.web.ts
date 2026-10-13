@@ -79,17 +79,39 @@ export function dataUri(mime: string, data: Uint8Array): string {
   return `data:${mime};base64,${base64.encode(data)}`;
 }
 
-/** A profile picture: one image, scaled down to 512px and re-encoded as JPEG. Null if cancelled. */
-export async function pickAvatar(): Promise<Uint8Array | null> {
+/** A photo picked to become a profile picture, before cropping (see files.ts). */
+export interface AvatarSource {
+  base64: string;
+  width: number;
+  height: number;
+}
+
+export const AVATAR_SIZE = 512;
+
+const toJpeg = async (canvas: HTMLCanvasElement, quality: number): Promise<Uint8Array> => {
+  const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/jpeg', quality));
+  if (!blob) throw new Error("Couldn't read that image.");
+  return new Uint8Array(await blob.arrayBuffer());
+};
+
+/** Picks the photo to crop, re-encoded at up to 1600px (which also drops its EXIF). Null if cancelled. */
+export async function pickAvatarSource(): Promise<AvatarSource | null> {
   const [f] = await pick('image/*', false);
   if (!f) return null;
   const img = await createImageBitmap(f);
-  const scale = Math.min(1, 512 / Math.max(img.width, img.height));
+  const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(img.width * scale);
   canvas.height = Math.round(img.height * scale);
   canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
-  const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/jpeg', 0.85));
-  if (!blob) throw new Error("Couldn't read that image.");
-  return new Uint8Array(await blob.arrayBuffer());
+  return {base64: base64.encode(await toJpeg(canvas, 0.9)), width: canvas.width, height: canvas.height};
+}
+
+/** Cuts the framed square (in source pixels) out and scales it to AVATAR_SIZE, as a JPEG. */
+export async function cropAvatar(src: AvatarSource, x: number, y: number, size: number): Promise<Uint8Array> {
+  const img = await createImageBitmap(new Blob([base64.decode(src.base64)], {type: 'image/jpeg'}));
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = AVATAR_SIZE;
+  canvas.getContext('2d')!.drawImage(img, x, y, size, size, 0, 0, AVATAR_SIZE, AVATAR_SIZE);
+  return toJpeg(canvas, 0.85);
 }

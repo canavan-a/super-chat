@@ -26,7 +26,8 @@ import {
   runUpdate,
 } from '../appUpdater';
 import {exportKeyFile, phraseFromEntropy} from '../crypto';
-import {dataUri, pickAvatar, saveTextFileAs} from '../files';
+import {AvatarSource, dataUri, pickAvatarSource, saveTextFileAs} from '../files';
+import {AvatarCropper} from '../components/AvatarCropper';
 import {Notice} from '../components/Notice';
 import {forgetIdentity, loadIdentity, NEEDS_PASSPHRASE} from '../keystore';
 import {platformConfirm} from '../platformConfirm';
@@ -203,10 +204,13 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
       setAvatarBusy(false);
     }
   };
+  // Pick, then frame it in the cropper; it's published once cropped.
+  const [cropSrc, setCropSrc] = useState<AvatarSource | null>(null);
   const chooseAvatar = async () => {
+    setAvatarError(null);
     try {
-      const jpeg = await pickAvatar();
-      if (jpeg) await updateAvatar(jpeg);
+      const src = await pickAvatarSource();
+      if (src) setCropSrc(src);
     } catch (e) {
       setAvatarError((e as Error).message);
     }
@@ -254,6 +258,17 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
     );
 
   return (
+    <View style={styles.fill}>
+    {cropSrc && (
+      <AvatarCropper
+        src={cropSrc}
+        onCancel={() => setCropSrc(null)}
+        onDone={async jpeg => {
+          setCropSrc(null);
+          await updateAvatar(jpeg);
+        }}
+      />
+    )}
     <ScrollView style={styles.scroll} contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
       <Text style={styles.title}>Settings</Text>
 
@@ -564,6 +579,7 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
         </>
       )}
     </ScrollView>
+    </View>
   );
 }
 
@@ -581,6 +597,7 @@ const THEME_PREVIEW: Record<string, {bg: string; primary: string}> = {
 
 function makeStyles(theme: Theme) {
   return StyleSheet.create({
+    fill: {flex: 1},
     scroll: {
       flex: 1,
       backgroundColor: theme.bg,

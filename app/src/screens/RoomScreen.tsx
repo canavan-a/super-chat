@@ -16,7 +16,7 @@ import {
 
 import type {HeaderInfo} from '../App';
 import {FileRef, fingerprint} from '../crypto';
-import {dataUri, pickFiles, pickImages, PickedFile, saveFileAs} from '../files';
+import {pickFiles, pickImages, PickedFile, saveFileAs} from '../files';
 import {Avatar} from '../components/Avatar';
 import {Icon} from '../components/Icon';
 import {Overlay} from '../components/Overlay';
@@ -29,15 +29,18 @@ import {
   deleteMessage,
   fetchFile,
   getRoom,
+  loadImage,
   loadOlder,
   markRead,
   openRoom,
+  peekImage,
   react,
   Room,
   roomsReady,
   send,
   sendFiles,
   sendTyping,
+  ShownImage,
   useStore,
 } from '../store';
 import {Theme, useTheme} from '../theme';
@@ -317,8 +320,6 @@ function ChatList({
   onReply: (m: ChatMessage) => void;
 }): React.JSX.Element {
   const listRef = useRef<FlatList>(null);
-  const nearBottom = useRef(true);
-  const contentHeight = useRef(0);
   const [showJump, setShowJump] = useState(false);
   const [menuFor, setMenuFor] = useState<ChatMessage | null>(null);
   const [viewer, setViewerRaw] = useState<{uri: string; ref: FileRef; data: Uint8Array} | null>(null);
@@ -353,38 +354,26 @@ function ChatList({
     return out;
   }, [room.receipts, meId]);
 
-  // Opening a room starts the list at the top and fills it in; the scroll
-  // events from that look like the user scrolling up, which used to switch
-  // off follow-the-bottom (and start loading older messages), leaving you at
-  // the top. Until the user touches the list, or it's had a moment to settle,
-  // stay pinned to the bottom and ignore them.
-  const settled = useRef(false);
-  useEffect(() => {
-    const t = setTimeout(() => (settled.current = true), 800);
-    return () => clearTimeout(t);
-  }, []);
-
-  const followBottom = () => {
-    if (settled.current && !nearBottom.current) return;
-    requestAnimationFrame(() => listRef.current?.scrollToOffset({offset: contentHeight.current, animated: false}));
-  };
-
+  // The list is inverted: newest first, drawn bottom-up, so it opens at the
+  // bottom and stays anchored there as messages arrive, with no scrolling
+  // to do. Offset 0 is the bottom; the "end" is the top, where older
+  // messages load.
+  const newestFirst = useMemo(() => [...messages].reverse(), [messages]);
   const handleScroll = (e: any) => {
-    if (!settled.current) return;
-    const {contentOffset, contentSize, layoutMeasurement} = e.nativeEvent;
-    const dist = contentSize.height - (contentOffset.y + layoutMeasurement.height);
-    nearBottom.current = dist < 150;
-    const far = dist > layoutMeasurement.height * 1.5;
+    const {contentOffset, layoutMeasurement} = e.nativeEvent;
+    const far = contentOffset.y > layoutMeasurement.height * 1.5;
     if (far !== showJump) setShowJump(far);
-    if (contentOffset.y < 300 && room.hasMore && !loadingOlderRef.current) {
-      loadingOlderRef.current = true;
-      loadOlder(room.key).finally(() => (loadingOlderRef.current = false));
-    }
+  };
+  const loadEarlier = () => {
+    if (!room.hasMore || loadingOlderRef.current) return;
+    loadingOlderRef.current = true;
+    loadOlder(room.key).finally(() => (loadingOlderRef.current = false));
   };
 
   const renderItem = ({item, index}: {item: ChatMessage; index: number}) => {
-    const prev = messages[index - 1];
-    const next = messages[index + 1];
+    // Inverted: the message before this one in time is the next in the list.
+    const prev = newestFirst[index + 1];
+    const next = newestFirst[index - 1];
     const mine = item.sender === meId;
     const grouped = !!prev && sameGroup(prev, item);
     const lastInGroup = !next || !sameGroup(item, next);
@@ -416,20 +405,17 @@ function ChatList({
       <FlatList
         ref={listRef}
         style={styles.chat}
-        data={messages}
+        inverted
+        data={newestFirst}
         keyExtractor={m => m.id}
         renderItem={renderItem}
         contentContainerStyle={styles.chatContent}
         onScroll={handleScroll}
-        onScrollBeginDrag={() => (settled.current = true)}
         scrollEventThrottle={32}
-        maintainVisibleContentPosition={nearBottom.current ? undefined : {minIndexForVisible: 0}}
-        onContentSizeChange={(_w, h) => {
-          contentHeight.current = h;
-          followBottom();
-        }}
-        onLayout={followBottom}
-        ListHeaderComponent={
+        onEndReached={loadEarlier}
+        onEndReachedThreshold={0.5}
+        // Inverted, the footer is drawn at the top: where the history starts.
+        ListFooterComponent={
           <View>
             {room.loading && <ActivityIndicator style={styles.olderSpinner} size="small" color={theme.textMuted} />}
             {!room.hasMore && room.loaded && (
@@ -452,7 +438,7 @@ function ChatList({
             )}
           </View>
         }
-        initialNumToRender={30}
+        initialNumToRender={20}
         maxToRenderPerBatch={10}
         windowSize={9}
       />
@@ -460,9 +446,8 @@ function ChatList({
         <Pressable
           style={styles.jumpButton}
           onPress={() => {
-            nearBottom.current = true;
             setShowJump(false);
-            listRef.current?.scrollToEnd({animated: true});
+            listRef.current?.scrollToOffset({offset: 0, animated: true});
           }}>
           <Text style={styles.jumpText}>↓ Jump to bottom</Text>
         </Pressable>
@@ -672,16 +657,19 @@ function ImageAttachment({
   theme: Theme;
   onOpen: (v: {uri: string; ref: FileRef; data: Uint8Array}) => void;
 }) {
-  const [img, setImg] = useState<{uri: string; data: Uint8Array} | null>(null);
+  // Straight from memory when it's been shown before: no spinner, no reload.
+  const [img, setImg] = useState<ShownImage | null>(() => peekImage(file));
   const [failed, setFailed] = useState(false);
   useEffect(() => {
+    if (img) return;
     let live = true;
-    fetchFile(roomKey, file)
-      .then(data => live && setImg({uri: dataUri(file.mime, data), data}))
+    loadImage(roomKey, file)
+      .then(shown => live && setImg(shown))
       .catch(() => live && setFailed(true));
     return () => {
       live = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomKey, file]);
   const ratio = file.w && file.h ? file.w / file.h : 4 / 3;
   if (failed) return <Text style={styles.brokenText}>🔒 Image unavailable</Text>;

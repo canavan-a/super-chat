@@ -67,3 +67,10 @@ export enum AuthorizationStatus {
   AUTHORIZED = 1,
   PROVISIONAL = 2,
 }
+
+export enum AndroidStyle {
+  BIGPICTURE = 0,
+  BIGTEXT = 1,
+  INBOX = 2,
+  MESSAGING = 3,
+}

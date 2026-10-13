@@ -21,6 +21,7 @@ import {useThemedAppIcon} from './appIcon';
 import {Icon, IconName} from './components/Icon';
 import {parseInviteLink} from './crypto';
 import {hasStoredIdentity, NEEDS_PASSPHRASE} from './keystore';
+import {LogoLine} from './logo/LogoArt';
 import {SplashGate} from './logo/SplashGate';
 import {splashHold} from './logo/splashHold';
 import {navTarget, pendingNav, SETTINGS_NAV} from './notifications/pendingNav';
@@ -334,9 +335,14 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
           </Pressable>
         )}
         <View style={styles.headerTextArea}>
-          <Text style={styles.headerTitle} numberOfLines={1}>
-            {showingRoomHeader ? headerInfo!.title : TITLES[route.name]}
-          </Text>
+          {route.name === 'home' ? (
+            // The app's own lettering, on one line, rather than plain text.
+            <LogoLine height={22} />
+          ) : (
+            <Text style={styles.headerTitle} numberOfLines={1}>
+              {showingRoomHeader ? headerInfo!.title : TITLES[route.name]}
+            </Text>
+          )}
           {showingRoomHeader && headerInfo!.subtitle ? (
             <Text style={styles.headerSubtitle} numberOfLines={1}>
               {headerInfo!.subtitle}

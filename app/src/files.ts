@@ -84,21 +84,44 @@ export async function saveFileAs(
 export const saveTextFileAs = (name: string, makeText: () => Promise<string>): Promise<SavedFile | null> =>
   saveFileAs(name, 'application/json', async () => utf8(await makeText()));
 
-/** A profile picture: one image, scaled down to 512px and re-encoded as JPEG (which also strips EXIF). Null if cancelled. */
-export async function pickAvatar(): Promise<Uint8Array | null> {
+/** A photo picked to become a profile picture, before cropping. */
+export interface AvatarSource {
+  /** base64 JPEG, re-encoded by the picker (so upright, and without EXIF) */
+  base64: string;
+  width: number;
+  height: number;
+}
+
+/** Picks the photo to crop. Kept to 1600px: plenty to crop a 512px square from. Null if cancelled. */
+export async function pickAvatarSource(): Promise<AvatarSource | null> {
   const res = await launchImageLibrary({
     mediaType: 'photo',
     selectionLimit: 1,
-    maxWidth: 512,
-    maxHeight: 512,
-    quality: 0.8,
+    maxWidth: 1600,
+    maxHeight: 1600,
+    quality: 0.9,
     includeBase64: true,
   });
   if (res.didCancel) return null;
   if (res.errorMessage) throw new Error(res.errorMessage);
   const a = res.assets?.[0];
   if (a?.uri?.startsWith('file://')) RNFS.unlink(a.uri.replace('file://', '')).catch(() => {});
-  return a?.base64 ? base64.decode(a.base64) : null;
+  if (!a?.base64 || !a.width || !a.height) return null;
+  return {base64: a.base64, width: a.width, height: a.height};
+}
+
+/** The size of the finished profile picture. */
+export const AVATAR_SIZE = 512;
+
+interface ImageCropNative {
+  crop(base64: string, x: number, y: number, size: number, out: number): Promise<string>;
+}
+
+/** Cuts the framed square (in source pixels) out and scales it to AVATAR_SIZE, as a JPEG. */
+export async function cropAvatar(src: AvatarSource, x: number, y: number, size: number): Promise<Uint8Array> {
+  const native = NativeModules.ImageCrop as ImageCropNative | undefined;
+  if (!native) throw new Error('Cropping needs the latest app build.');
+  return base64.decode(await native.crop(src.base64, x, y, size, AVATAR_SIZE));
 }
 
 export async function pickImages(): Promise<PickedFile[]> {

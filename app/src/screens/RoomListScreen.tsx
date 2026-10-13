@@ -43,22 +43,43 @@ export function RoomListScreen({
           data={rooms}
           keyExtractor={r => r.key}
           contentContainerStyle={rooms.length === 0 ? styles.emptyContent : styles.listContent}
-          renderItem={({item}) => (
-            <Pressable
-              style={({pressed}) => [styles.row, {borderLeftColor: item.color}, pressed && styles.rowPressed]}
-              onPress={() => onNavigate({name: 'room', key: item.key})}>
-              <View style={styles.rowTitleRow}>
-                <Text style={[styles.rowTitle, item.unread && styles.rowTitleUnread]} numberOfLines={1}>
-                  {item.name}
-                </Text>
-                {item.unread && <View style={[styles.rowDot, {backgroundColor: theme.primary}]} />}
-              </View>
-              <Text style={styles.rowSubtitle} numberOfLines={1}>
-                {showServer ? item.server.replace(/^https?:\/\//, '') + ' · ' : ''}
-                {item.lastAt ? timeAgo(item.lastAt) : 'quiet'}
-              </Text>
-            </Pressable>
-          )}
+          renderItem={({item}) => {
+            // Unread: bold, the preview in full color, a count badge, and a
+            // tinted row. Caught up: plain, with a muted preview.
+            const unread = item.unread || item.unreadCount > 0;
+            return (
+              <Pressable
+                style={({pressed}) => [
+                  styles.row,
+                  {borderLeftColor: item.color},
+                  unread && styles.rowUnread,
+                  pressed && styles.rowPressed,
+                ]}
+                onPress={() => onNavigate({name: 'room', key: item.key})}>
+                <View style={styles.rowTop}>
+                  <Text style={[styles.rowTitle, unread && styles.rowTitleUnread]} numberOfLines={1}>
+                    {item.name}
+                  </Text>
+                  <Text style={[styles.rowTime, unread && styles.rowTimeUnread]}>
+                    {item.lastAt ? timeAgo(item.lastAt) : ''}
+                  </Text>
+                </View>
+                <View style={styles.rowBottom}>
+                  <Text style={[styles.rowPreview, unread && styles.rowPreviewUnread]} numberOfLines={1}>
+                    {showServer ? item.server.replace(/^https?:\/\//, '') + ' · ' : ''}
+                    {item.preview ?? (unread ? 'New messages' : 'No messages yet')}
+                  </Text>
+                  {unread && (
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeText}>
+                        {item.unreadCount > 0 ? (item.unreadCount > 99 ? '99+' : item.unreadCount) : ''}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </Pressable>
+            );
+          }}
           ListEmptyComponent={
             <View style={styles.center}>
               <Text style={styles.emptyTitle}>No rooms yet</Text>
@@ -117,12 +138,26 @@ function makeStyles(theme: Theme) {
       // Room color accent, the same treatment super-badger gives stations.
       borderLeftWidth: 4,
     },
-    rowPressed: {backgroundColor: theme.surface},
-    rowTitleRow: {flexDirection: 'row', alignItems: 'center', gap: 6},
-    rowTitle: {flexShrink: 1, fontSize: 15, fontWeight: '600', color: theme.text},
+    rowUnread: {backgroundColor: theme.surface},
+    rowPressed: {backgroundColor: theme.surfaceAlt},
+    rowTop: {flexDirection: 'row', alignItems: 'baseline', gap: 8},
+    rowTitle: {flex: 1, fontSize: 15, fontWeight: '500', color: theme.text},
     rowTitleUnread: {fontWeight: '800'},
-    rowDot: {width: 7, height: 7, borderRadius: 4},
-    rowSubtitle: {fontSize: 12, color: theme.textMuted, marginTop: 2},
+    rowTime: {fontSize: 11, color: theme.textMuted},
+    rowTimeUnread: {color: theme.primary, fontWeight: '700'},
+    rowBottom: {flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 3},
+    rowPreview: {flex: 1, fontSize: 13, color: theme.textMuted},
+    rowPreviewUnread: {color: theme.text, fontWeight: '600'},
+    badge: {
+      minWidth: 20,
+      height: 20,
+      paddingHorizontal: 6,
+      borderRadius: 10,
+      backgroundColor: theme.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    badgeText: {fontSize: 11, fontWeight: '800', color: theme.primaryText},
     fab: {
       position: 'absolute',
       right: 20,

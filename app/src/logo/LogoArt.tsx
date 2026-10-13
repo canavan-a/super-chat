@@ -143,3 +143,22 @@ export function LogoArt({height}: {height: number}): React.JSX.Element {
     </View>
   );
 }
+
+/** "Super Chat" on one line in the logo's own pixel lettering and theme colors (the room list's header). */
+export function LogoLine({height}: {height: number}): React.JSX.Element {
+  const theme = useTheme();
+  const viewW = LOGO.line.w * PIXEL_W;
+  const viewH = LOGO.line.h * PIXEL_H;
+  const width = (height * viewW) / viewH;
+  return (
+    <View style={{width, height}} accessible accessibilityRole="header" accessibilityLabel="Super Chat">
+      <ToneLayer
+        tones={LOGO.line.tones}
+        fill={t => toneColor(theme, t.u, t.w)}
+        view={[0, 0, viewW, viewH]}
+        width={width}
+        height={height}
+      />
+    </View>
+  );
+}

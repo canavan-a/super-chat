@@ -11,6 +11,7 @@ import {useEffect, useReducer, useRef} from 'react';
 
 import {api, ApiError, downloadBlob, uploadBlob} from './api';
 import {clearSealed, getSealed, putSealed, removeSealed} from './blobDisk';
+import {dataUri} from './files';
 import {
   applyEvent,
   AvatarRef,
@@ -154,6 +155,10 @@ export interface RoomListItem {
   name: string;
   color: string;
   unread: boolean;
+  /** Unread messages from others, as far as this device has loaded them. */
+  unreadCount: number;
+  /** The latest message, as one line ("Alice: see you there"), or null. */
+  preview: string | null;
   lastAt: number;
 }
 
@@ -166,9 +171,23 @@ export function roomList(): RoomListItem[] {
       name: r.view?.name ?? 'Encrypted room',
       color: r.view?.color ?? FALLBACK_ROOM_COLOR,
       unread: r.lastPos > (lastRead[r.key] ?? 0) && r.lastPos > 0,
+      unreadCount: r.messages.filter(m => !m.pending && m.pos > (lastRead[r.key] ?? 0) && m.sender !== r.me.id).length,
+      preview: previewLine(r),
       lastAt: r.lastAt,
     }))
     .sort((a, b) => b.lastAt - a.lastAt);
+}
+
+function previewLine(r: Room): string | null {
+  let m: ChatMessage | undefined;
+  for (let i = r.messages.length - 1; i >= 0 && !m; i--) if (!r.messages[i].pending) m = r.messages[i];
+  if (!m) return null;
+  const who = m.sender === r.me.id ? 'You' : (r.view?.names[m.sender] ?? 'Someone');
+  const c = m.content;
+  let what = '🔒 Encrypted message';
+  if (c?.t === 'text') what = c.body;
+  else if (c?.t === 'file') what = c.body || (c.files.every((f: FileRef) => f.mime.startsWith('image/')) ? '📷 Photo' : `📎 ${c.files[0]?.name ?? 'File'}`);
+  return `${who}: ${what.replace(/\s+/g, ' ').slice(0, 120)}`;
 }
 
 function blankRoom(server: string, id: string): Room {
@@ -371,6 +390,7 @@ export async function refreshRooms(): Promise<void> {
             await loadState(r);
             await maybeRotate(r);
             syncAvatar(r).catch(() => {});
+            await prefetchLatest(r).catch(() => {});
           } catch (e) {
             if (e instanceof ApiError && e.status === 404) rooms.delete(r.key);
             else r.error = String((e as Error).message ?? e);
@@ -437,6 +457,31 @@ function pruneExpired(r: Room) {
 }
 
 /** Loads the newest page of a room (first open) or catches up after a gap. */
+/** Hands the JS thread back between small batches, so taps (Back) get through mid-load. */
+const yieldToUi = () => new Promise<void>(res => setTimeout(res, 0));
+
+/**
+ * Decrypts and files a page of messages a few at a time. Each one is an
+ * AEAD open plus a signature check in JS; a whole page in one go held the UI
+ * for a noticeable moment.
+ */
+async function ingestPage(r: Room, page: ServerMessage[]) {
+  for (let i = 0; i < page.length; i++) {
+    ingest(r, decrypt(r, page[i]));
+    if (i % 8 === 7) await yieldToUi();
+  }
+}
+
+/**
+ * The newest few messages of a room not opened yet, for the room list's
+ * preview and unread count. Opening the room later continues from these.
+ */
+async function prefetchLatest(r: Room) {
+  if (r.messages.length) return;
+  const page = await api.messages(r.server, r.id, r.me, {limit: 20});
+  await ingestPage(r, page);
+}
+
 export async function openRoom(key: string): Promise<void> {
   const r = rooms.get(key);
   if (!r || r.loading) return;
@@ -449,7 +494,7 @@ export async function openRoom(key: string): Promise<void> {
       ? await api.messages(r.server, r.id, r.me, {after: newest.pos, limit: 200})
       : await api.messages(r.server, r.id, r.me, {limit: 50});
     if (!newest) r.hasMore = page.length === 50;
-    for (const m of page) ingest(r, decrypt(r, m));
+    await ingestPage(r, page);
     pruneExpired(r);
     r.loaded = true;
     r.error = null;
@@ -471,7 +516,7 @@ export async function loadOlder(key: string): Promise<void> {
   try {
     const page = await api.messages(r.server, r.id, r.me, {before: oldest.pos, limit: 50});
     r.hasMore = page.length === 50;
-    for (const m of page) ingest(r, decrypt(r, m));
+    await ingestPage(r, page);
   } catch (e) {
     r.error = String((e as Error).message ?? e);
   } finally {
@@ -826,13 +871,6 @@ function profileEnc(r: Room, displayName: string): Record<string, unknown> {
   return avatar ? {displayName, avatar} : {displayName};
 }
 
-/** A member's picture, decrypted (cached on disk sealed, like attachments). Null if they have none. */
-export async function fetchAvatar(key: string, member: string): Promise<Uint8Array | null> {
-  const ref = rooms.get(key)?.view?.avatars[member];
-  if (!ref) return null;
-  return fetchFile(key, {blob: ref.blob, key: ref.key, name: 'avatar.jpg', mime: 'image/jpeg', size: 0});
-}
-
 async function republishProfile(r: Room) {
   const name = myName(r);
   const s = r.log?.state;
@@ -951,7 +989,10 @@ export async function sendFiles(
 const blobCache = new Map<string, Uint8Array>();
 export async function fetchFile(key: string, ref: FileRef): Promise<Uint8Array> {
   const cached = blobCache.get(ref.blob);
-  if (cached) return cached;
+  if (cached) {
+    remember(ref.blob, cached); // most recently used
+    return cached;
+  }
   const r = rooms.get(key);
   if (!r) throw new Error('room not loaded');
   const fileKey = unb64(ref.key);
@@ -975,10 +1016,41 @@ export async function fetchFile(key: string, ref: FileRef): Promise<Uint8Array> 
   return data;
 }
 
-// Keep a few recent images decrypted in memory only; never on disk.
+// Keep recent images decrypted in memory only (never on disk), least recently
+// used out first, with the data: URI each one is shown through, so a row that
+// scrolls back into view shows its image at once instead of re-encoding it.
+const uriCache = new Map<string, string>();
 function remember(blob: string, data: Uint8Array) {
-  if (blobCache.size > 24) blobCache.delete(blobCache.keys().next().value!);
+  blobCache.delete(blob);
   blobCache.set(blob, data);
+  while (blobCache.size > 48) {
+    const oldest = blobCache.keys().next().value!;
+    blobCache.delete(oldest);
+    uriCache.delete(oldest);
+  }
+}
+
+export interface ShownImage {
+  uri: string;
+  data: Uint8Array;
+}
+
+/** An image already decrypted in memory, synchronously; null if it needs loading. */
+export function peekImage(ref: FileRef): ShownImage | null {
+  const data = blobCache.get(ref.blob);
+  if (!data) return null;
+  let uri = uriCache.get(ref.blob);
+  if (!uri) {
+    uri = dataUri(ref.mime, data);
+    uriCache.set(ref.blob, uri);
+  }
+  return {uri, data};
+}
+
+/** An image ready to show: from memory, the device cache, or the server. */
+export async function loadImage(key: string, ref: FileRef): Promise<ShownImage> {
+  await fetchFile(key, ref);
+  return peekImage(ref)!;
 }
 
 export function react(key: string, target: string, emoji: string) {

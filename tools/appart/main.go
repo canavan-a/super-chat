@@ -196,7 +196,9 @@ func main() {
 
 	// The wordmark is stacked, "Super" over "Chat", everywhere: on the splash
 	// under the bubble, and alone as the launcher icon. The mark is centered
-	// over it; both share one width.
+	// over it; both share one width. The one-line wordmark is kept too, for
+	// the room list's header.
+	line := crop(word)
 	word, slices = stackWord(word, slices)
 	width := max(word.w(), mark.w())
 	mark = center(mark, width)
@@ -207,7 +209,7 @@ func main() {
 		slices[i].x1 += shift
 	}
 
-	must(writeLogoData(filepath.Join(*app, "src/logo/logoData.ts"), width, mark, word, slices))
+	must(writeLogoData(filepath.Join(*app, "src/logo/logoData.ts"), width, mark, word, slices, line))
 	icon := crop(word)
 	must(writePalette(filepath.Join(*app, "src/logo/iconPalette.json"), pals, icon))
 	must(writeAndroid(filepath.Join(*app, "android/app/src/main/res"), pals, icon))
@@ -235,7 +237,7 @@ func must(err error) {
 	}
 }
 
-func writeLogoData(path string, width int, mark, word Grid, slices []span) error {
+func writeLogoData(path string, width int, mark, word Grid, slices []span, line Grid) error {
 	body := groupOf(mark, 0, width, func(c byte) bool { return c != 'o' })
 	dots := groupOf(mark, 0, width, func(c byte) bool { return c == 'o' })
 	var ex, ey, en float64
@@ -275,6 +277,8 @@ export interface LogoData {
   word: {rows: number; slices: {x0: number; x1: number; tones: ToneRuns[]}[]};
   /** the bubble, cropped, used for the app icon */
   icon: {w: number; h: number; tones: ToneRuns[]};
+  /** the wordmark on one line, cropped (the room list's header) */
+  line: {w: number; h: number; tones: ToneRuns[]};
 }
 
 `)
@@ -289,7 +293,8 @@ export interface LogoData {
 	}
 	b.WriteString("    ],\n  },\n")
 	icon := crop(mark)
-	b.WriteString(fmt.Sprintf("  icon: {w: %d, h: %d, tones: %s},\n};\n", icon.w(), len(icon), tonesTS(groupOf(icon, 0, icon.w(), func(byte) bool { return true }), "  ")))
+	b.WriteString(fmt.Sprintf("  icon: {w: %d, h: %d, tones: %s},\n", icon.w(), len(icon), tonesTS(groupOf(icon, 0, icon.w(), func(byte) bool { return true }), "  ")))
+	b.WriteString(fmt.Sprintf("  line: {w: %d, h: %d, tones: %s},\n};\n", line.w(), len(line), tonesTS(groupOf(line, 0, line.w(), func(byte) bool { return true }), "  ")))
 	return writeFile(path, b.String())
 }
 

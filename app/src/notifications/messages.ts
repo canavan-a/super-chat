@@ -2,7 +2,7 @@
 // the small bubble icon tinted with the room's color, one notification per
 // room that the newest message replaces. Messages are decrypted on the
 // phone before this ever sees them; nothing goes through a push service.
-import notifee from '@notifee/react-native';
+import notifee, {AndroidStyle} from '@notifee/react-native';
 
 import {fingerprint} from '../crypto';
 import {rgbToHex, themeAccent} from '../logo/logoTheme';
@@ -32,34 +32,64 @@ export async function setViewingRoom(roomKey: string | null): Promise<void> {
   if (roomKey) await notifee.cancelNotification(nid(roomKey)).catch(() => {});
 }
 
-const unread = new Map<string, number>();
+/** A room's messages since it was last opened, for its notification. */
+interface Line {
+  sender: string;
+  text: string;
+  at: number;
+}
+const unread = new Map<string, Line[]>();
+/** The most a room's expanded notification lists (the newest ones). */
+const MAX_LINES = 25;
 
 export async function notifyMessage(room: Room, msg: ChatMessage): Promise<void> {
   const s = settingsStore.get();
   if (!s.bgNotifications || room.key === viewingRoom) return;
   await ensureChannels();
-  const count = (unread.get(room.key) ?? 0) + 1;
-  unread.set(room.key, count);
+  const c = msg.content;
+  const line: Line = {
+    sender: room.view?.names[msg.sender] ?? fingerprint(msg.sender),
+    text: (c?.t === 'text' ? c.body : c?.t === 'file' ? c.body || '📎 Attachment' : '🔒 Message').slice(0, 300),
+    at: msg.createdAt,
+  };
+  const lines = [...(unread.get(room.key) ?? []), line].slice(-MAX_LINES);
+  unread.set(room.key, lines);
   const roomName = room.view?.name ?? 'Super Chat';
-  const sender = room.view?.names[msg.sender] ?? fingerprint(msg.sender);
-  let body = count > 1 ? `${count} new messages` : 'New message';
-  if (s.notifPreviews && msg.content) {
-    const c = msg.content;
-    const text = c.t === 'text' ? c.body : c.t === 'file' ? c.body || '📎 Attachment' : '';
-    if (text) body = `${sender}: ${text.slice(0, 300)}`;
-  }
-  await notifee.displayNotification({
+  const shared = {
     id: nid(room.key),
     title: roomName,
-    body,
     data: {roomKey: room.key, ...PREFER_SMALL_ICON},
+  };
+  const android = {
+    channelId: CH_MESSAGES,
+    smallIcon: 'ic_notification',
+    color: await notificationColor(room.view?.color),
+    pressAction: PRESS_ACTION,
+    timestamp: msg.createdAt,
+    showTimestamp: true,
+  };
+  if (!s.notifPreviews) {
+    await notifee.displayNotification({
+      ...shared,
+      body: lines.length > 1 ? `${lines.length} new messages` : 'New message',
+      android,
+    });
+    return;
+  }
+  // Messaging style: collapsed it shows the newest message; pulled down it
+  // lists every new one since the room was last opened, each with its sender.
+  await notifee.displayNotification({
+    ...shared,
+    body: `${line.sender}: ${line.text}`,
     android: {
-      channelId: CH_MESSAGES,
-      smallIcon: 'ic_notification',
-      color: await notificationColor(room.view?.color),
-      pressAction: PRESS_ACTION,
-      timestamp: msg.createdAt,
-      showTimestamp: true,
+      ...android,
+      style: {
+        type: AndroidStyle.MESSAGING,
+        person: {name: 'You'},
+        title: roomName,
+        group: true,
+        messages: lines.map(l => ({text: l.text, timestamp: l.at, person: {name: l.sender}})),
+      },
     },
   });
 }
