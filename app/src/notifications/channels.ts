@@ -2,7 +2,7 @@
 // native-only code paths (BackgroundMonitorService, index.js, or dynamic
 // imports from shared screens), never statically from a file the Vite web
 // build bundles.
-import notifee, {AndroidImportance, AndroidVisibility} from '@notifee/react-native';
+import notifee, {AndroidImportance, AndroidVisibility, AuthorizationStatus} from '@notifee/react-native';
 
 export const CH_SERVICE = 'superchat-fgs';
 export const CH_MESSAGES = 'superchat-messages';
@@ -34,3 +34,29 @@ export const PRESS_ACTION = {id: 'default', launchActivity: 'com.superchatapp.Ma
 // rather than the light theme's launcher icon. patches/ lets Notifee pass a
 // boolean through.
 export const PREFER_SMALL_ICON = {'android.app.preferSmallIcon': true as unknown as string};
+
+// Asking Android for notification permission. It handles one request at a
+// time and silently drops any other made meanwhile, which never answers: the
+// "notify on new messages" switch used to hang on exactly that. So: check
+// first (instant, no dialog), ask only when it isn't granted, share one
+// request between callers, and never wait on it for ever.
+let asking: Promise<boolean> | null = null;
+
+/** True when notifications are allowed (asking, with Android's dialog, only if they aren't yet). */
+export async function ensureNotificationPermission(): Promise<boolean> {
+  const allowed = async () =>
+    (await notifee.getNotificationSettings()).authorizationStatus === AuthorizationStatus.AUTHORIZED;
+  if (await allowed()) return true;
+  asking ??= (async () => {
+    try {
+      const res = await Promise.race([
+        notifee.requestPermission(),
+        new Promise<null>(resolve => setTimeout(() => resolve(null), 20_000)),
+      ]);
+      return res ? res.authorizationStatus === AuthorizationStatus.AUTHORIZED : await allowed();
+    } finally {
+      asking = null;
+    }
+  })();
+  return asking;
+}

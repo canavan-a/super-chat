@@ -15,6 +15,8 @@ import {api, ApiError, blobRequest, downloadBlob, uploadBlob} from './api';
 import {clearSealed, getSealed, noteCached, putSealed, removeSealed} from './blobDisk';
 import {dataUri} from './files';
 import {
+  aeadOpen,
+  aeadSeal,
   applyEvent,
   AvatarRef,
   b64,
@@ -28,6 +30,7 @@ import {
   encryptBlob,
   encryptMessage,
   FileRef,
+  hkdf,
   Identity,
   InviteLink,
   joinBatch,
@@ -49,6 +52,7 @@ import {
   sign,
   sortedMembers,
   unb64,
+  unutf8,
   utf8,
   vaultKeys,
 } from './crypto';
@@ -130,6 +134,52 @@ const LAST_READ_KEY = 'superchat.lastRead.v1';
 function emit() {
   version++;
   listeners.forEach(l => l());
+  saveListCacheSoon();
+}
+
+// ---- the room list, remembered between launches ----
+//
+// What the list showed last time (names, colors, previews, times), so on
+// launch it draws at once, before any network, and live data replaces it as
+// it arrives. Names and previews are decrypted content, so the cache is
+// sealed with a key derived from the account: unreadable until unlock, which
+// is exactly when the list is drawn.
+
+const LIST_CACHE_KEY = 'superchat.listCache.v1';
+const LIST_CACHE_AD = utf8('sc-list-cache');
+interface CachedRow {
+  name: string;
+  color: string;
+  preview: string | null;
+  lastAt: number;
+  unreadCount: number;
+}
+let listCache: Record<string, CachedRow> = {};
+const listCacheKey = () => hkdf(account().entropy, 'superchat/list-cache');
+
+async function loadListCache(): Promise<void> {
+  try {
+    const raw = await AsyncStorage.getItem(LIST_CACHE_KEY);
+    listCache = raw ? JSON.parse(unutf8(aeadOpen(listCacheKey(), unb64(raw), LIST_CACHE_AD))) : {};
+  } catch {
+    listCache = {}; // another account's, or damaged: start fresh
+  }
+}
+
+let listCacheTimer: ReturnType<typeof setTimeout> | null = null;
+function saveListCacheSoon() {
+  if (listCacheTimer || !session.get() || !roomsLoaded) return;
+  listCacheTimer = setTimeout(() => {
+    listCacheTimer = null;
+    if (!session.get()) return;
+    const rows: Record<string, CachedRow> = {};
+    for (const item of roomList()) {
+      rows[item.key] = {name: item.name, color: item.color, preview: item.preview, lastAt: item.lastAt, unreadCount: item.unreadCount};
+    }
+    listCache = rows;
+    const sealed = b64(aeadSeal(listCacheKey(), utf8(JSON.stringify(rows)), LIST_CACHE_AD));
+    AsyncStorage.setItem(LIST_CACHE_KEY, sealed).catch(() => {});
+  }, 3000);
 }
 
 export function subscribe(l: () => void): () => void {
@@ -166,17 +216,22 @@ export interface RoomListItem {
 
 export function roomList(): RoomListItem[] {
   return [...rooms.values()]
-    .map(r => ({
-      key: r.key,
-      server: r.server,
-      id: r.id,
-      name: r.view?.name ?? 'Encrypted room',
-      color: r.view?.color ?? FALLBACK_ROOM_COLOR,
-      unread: r.lastPos > (lastRead[r.key] ?? 0) && r.lastPos > 0,
-      unreadCount: r.messages.filter(m => !m.pending && m.pos > (lastRead[r.key] ?? 0) && m.sender !== r.me.id).length,
-      preview: previewLine(r),
-      lastAt: r.lastAt,
-    }))
+    .map(r => {
+      // Live data where it's loaded, else what the list showed last launch.
+      const cached = listCache[r.key];
+      const unreadCount = r.messages.filter(m => !m.pending && m.pos > (lastRead[r.key] ?? 0) && m.sender !== r.me.id).length;
+      return {
+        key: r.key,
+        server: r.server,
+        id: r.id,
+        name: r.view?.name ?? cached?.name ?? 'Encrypted room',
+        color: r.view?.color ?? cached?.color ?? FALLBACK_ROOM_COLOR,
+        unread: r.lastPos > 0 ? r.lastPos > (lastRead[r.key] ?? 0) : (cached?.unreadCount ?? 0) > 0,
+        unreadCount: r.loaded || r.messages.length ? unreadCount : (cached?.unreadCount ?? 0),
+        preview: previewLine(r) ?? cached?.preview ?? null,
+        lastAt: Math.max(r.lastAt, cached?.lastAt ?? 0),
+      };
+    })
     .sort((a, b) => b.lastAt - a.lastAt);
 }
 
@@ -393,6 +448,13 @@ async function loadRooms(): Promise<void> {
     lastRead = {};
   }
   const local = await loadLocalList();
+  // Draw last launch's list straight away; live data fills in over it.
+  await loadListCache();
+  for (const [server, ids] of Object.entries(local)) for (const id of ids) ensureRoom(server, id);
+  if (Object.keys(listCache).length) {
+    roomsLoaded = true;
+    emit();
+  }
   const work = Promise.all(
     [...new Set([...servers, ...Object.keys(local)])].map(async server => {
       const fromVault = await readVault(server).catch(() => null);
@@ -432,7 +494,7 @@ async function loadRooms(): Promise<void> {
 }
 
 /** The longest the room list waits for slow servers before showing what it has. */
-const ROOMS_READY_WAIT_MS = 6000;
+const ROOMS_READY_WAIT_MS = 1500;
 
 function retentionCutoff(r: Room): number {
   const days = r.view?.retentionDays ?? 0;
@@ -459,11 +521,14 @@ function decrypt(r: Room, m: ServerMessage): ChatMessage {
 function ingest(r: Room, msg: ChatMessage) {
   const c = msg.content;
   if (c?.t === 'reaction') {
-    const byEmoji = {...(r.reactions[c.target] ?? {})};
-    const senders = (byEmoji[c.emoji] ?? []).filter(s => s !== msg.sender);
-    if (!c.remove) senders.push(msg.sender);
-    if (senders.length) byEmoji[c.emoji] = senders;
-    else delete byEmoji[c.emoji];
+    const byEmoji: Record<string, string[]> = {};
+    for (const [emoji, who] of Object.entries(r.reactions[c.target] ?? {})) {
+      // One reaction per person per message: adding one replaces whatever
+      // they had on it before (and a removal takes theirs off).
+      const rest = emoji === c.emoji || !c.remove ? who.filter(s => s !== msg.sender) : who;
+      if (rest.length) byEmoji[emoji] = rest;
+    }
+    if (!c.remove) byEmoji[c.emoji] = [...(byEmoji[c.emoji] ?? []), msg.sender];
     r.reactions = {...r.reactions, [c.target]: byEmoji};
     return;
   }
@@ -509,12 +574,22 @@ async function prefetchLatest(r: Room) {
   await ingestPage(r, page);
 }
 
+/** When the last full reload (vault, every room's log and keys) ran. */
+let lastFullRefresh = Date.now();
+/** A pull reloads everything only if the last full reload is older than this. */
+const FULL_REFRESH_EVERY_MS = 5 * 60_000;
+
 /**
- * Pull-to-refresh on the room list: brings every room up to date (new rooms
- * from the vault, then each room's messages since the newest one held).
+ * Pull-to-refresh on the room list. Usually just a quick catch-up: each
+ * room's messages since the newest one held, all at once (the WebSocket
+ * keeps the rest current anyway). Only every few minutes does it also redo
+ * the full reload (new rooms from the vault, each room's log and keys).
  */
 export async function refreshAll(): Promise<void> {
-  await refreshRooms().catch(() => {});
+  if (Date.now() - lastFullRefresh > FULL_REFRESH_EVERY_MS) {
+    lastFullRefresh = Date.now();
+    await refreshRooms().catch(() => {});
+  }
   await Promise.all(
     [...rooms.values()].map(async r => {
       if (!r.log || r.loading) return;
@@ -1125,10 +1200,25 @@ export async function loadImage(key: string, ref: FileRef): Promise<ShownImage> 
   return peekImage(ref)!;
 }
 
-export function react(key: string, target: string, emoji: string) {
+/**
+ * Toggles my reaction: the same emoji again takes it off; a different one
+ * replaces it (one reaction per person per message).
+ */
+export async function react(key: string, target: string, emoji: string) {
   const r = rooms.get(key)!;
-  const mine = r.reactions[target]?.[emoji]?.includes(r.me.id);
-  return send(key, {t: 'reaction', target, emoji, remove: mine || undefined});
+  const current = Object.entries(r.reactions[target] ?? {}).find(([, who]) => who.includes(r.me.id))?.[0];
+  if (current === emoji) return send(key, {t: 'reaction', target, emoji, remove: true});
+  // Take the old one off explicitly too, so apps from before the
+  // one-per-person rule agree.
+  if (current) await send(key, {t: 'reaction', target, emoji: current, remove: true});
+  return send(key, {t: 'reaction', target, emoji});
+}
+
+/** Takes my reaction (whichever it is) off a message. */
+export function unreact(key: string, target: string) {
+  const r = rooms.get(key)!;
+  const current = Object.entries(r.reactions[target] ?? {}).find(([, who]) => who.includes(r.me.id))?.[0];
+  return current ? send(key, {t: 'reaction', target, emoji: current, remove: true}) : Promise.resolve();
 }
 
 /** Admins only (the log enforces it): deletes every message so far, for everyone. */
@@ -1271,5 +1361,7 @@ export function resetStore() {
   AsyncStorage.removeItem(ROOMS_KEY).catch(() => {});
   myAvatar = null;
   AsyncStorage.removeItem(MY_AVATAR_KEY).catch(() => {});
+  listCache = {};
+  AsyncStorage.removeItem(LIST_CACHE_KEY).catch(() => {});
   emit();
 }

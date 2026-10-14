@@ -97,8 +97,8 @@ export function clearUnread(roomKey: string) {
   unread.delete(roomKey);
 }
 
+/** The caller checks permission first (ensureNotificationPermission). */
 export async function sendTestNotification(): Promise<void> {
-  await notifee.requestPermission();
   await ensureChannels();
   await notifee.displayNotification({
     id: 'superchat-test',

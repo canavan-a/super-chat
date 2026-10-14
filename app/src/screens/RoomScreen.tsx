@@ -18,6 +18,7 @@ import type {HeaderInfo} from '../App';
 import {FileRef, fingerprint} from '../crypto';
 import {pickFiles, pickImages, PickedFile, saveFileAs} from '../files';
 import {Avatar} from '../components/Avatar';
+import {PixelField} from '../components/PixelField';
 import {Icon} from '../components/Icon';
 import {Overlay} from '../components/Overlay';
 import {MarkdownText} from '../components/Markdown';
@@ -37,6 +38,7 @@ import {
   openRoom,
   peekImage,
   react,
+  unreact,
   Room,
   roomsReady,
   send,
@@ -406,6 +408,8 @@ function ChatList({
 
   return (
     <View style={styles.chatContainer}>
+      {/* The same still constellation as the room list, behind the messages. */}
+      <PixelField />
       <FlatList
         ref={listRef}
         style={styles.chat}
@@ -526,6 +530,19 @@ function ChatList({
                 <View key={emoji} style={styles.whoRow}>
                   <Text style={styles.whoEmoji}>{emoji}</Text>
                   <Text style={styles.whoNames}>{who.map(id => (id === meId ? 'You' : nameOf(id))).join(', ')}</Text>
+                  {who.includes(meId) && (
+                    <Pressable
+                      style={styles.whoRemove}
+                      hitSlop={6}
+                      onPress={() => {
+                        const target = whoFor.id;
+                        setWhoFor(null);
+                        unreact(room.key, target).catch(() => {});
+                      }}
+                      accessibilityLabel="Remove my reaction">
+                      <Text style={styles.whoRemoveText}>Remove</Text>
+                    </Pressable>
+                  )}
                 </View>
               ))}
         </View>
@@ -857,8 +874,9 @@ function makeStyles(theme: Theme) {
       borderBottomColor: theme.danger,
     },
     errorText: {flex: 1, color: theme.danger, fontSize: 13},
-    chatContainer: {flex: 1},
-    chat: {flex: 1, backgroundColor: theme.bg},
+    // The page color sits under the constellation; the list is see-through.
+    chatContainer: {flex: 1, backgroundColor: theme.bg},
+    chat: {flex: 1},
     chatContent: {padding: 16, paddingBottom: 24, gap: 4},
     olderSpinner: {paddingVertical: 8},
     startNotice: {
@@ -926,6 +944,8 @@ function makeStyles(theme: Theme) {
     whoRow: {flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10},
     whoEmoji: {fontSize: 20},
     whoNames: {flex: 1, fontSize: 14, color: theme.text},
+    whoRemove: {paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, backgroundColor: theme.surfaceAlt},
+    whoRemoveText: {fontSize: 12, fontWeight: '700', color: theme.danger},
     seen: {fontSize: 10, color: theme.textMuted, marginTop: 2},
     typingRow: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingBottom: 6},
     typingText: {fontSize: 11, color: theme.textMuted, fontStyle: 'italic'},

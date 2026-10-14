@@ -26,5 +26,7 @@ it('renders the room list with rooms (pixel field, pull, rows)', () => {
   });
   act(() => jest.advanceTimersByTime(2000));
   expect(tree.root.findAll(n => n.props?.children === 'Alpha').length).toBeGreaterThan(0);
+  // the still constellation drew its pixels
+  expect(tree.root.findAll(n => n.props?.style?.position === 'absolute' && n.props?.style?.opacity < 0.2).length).toBeGreaterThan(0);
   act(() => tree.unmount());
 });

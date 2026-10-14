@@ -1,5 +1,5 @@
 import React, {useMemo, useRef, useState} from 'react';
-import {ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View} from 'react-native';
+import {FlatList, Pressable, StyleSheet, Text, View} from 'react-native';
 
 import {Icon} from '../components/Icon';
 import {Overlay} from '../components/Overlay';
@@ -36,68 +36,73 @@ export function RoomListScreen({
 
   return (
     <View style={styles.container}>
-      {loading && rooms.length === 0 ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={theme.textMuted} />
-          <Text style={styles.muted}>Loading your rooms…</Text>
-        </View>
-      ) : (
-        <SpringyPull
-          atTop={() => scrollY.current <= 0}
-          onRefresh={refreshAll}
-          background={pull => <PixelField pull={pull} />}>
-          <FlatList
-            data={rooms}
-            keyExtractor={r => r.key}
-            onScroll={e => (scrollY.current = e.nativeEvent.contentOffset.y)}
-            scrollEventThrottle={32}
-            contentContainerStyle={rooms.length === 0 ? styles.emptyContent : styles.listContent}
-            renderItem={({item}) => {
-              // Unread: bold, the preview in full color, a count badge, and a
-              // tinted row. Caught up: plain, with a muted preview.
-              const unread = item.unread || item.unreadCount > 0;
-              return (
-                <Pressable
-                  style={({pressed}) => [
-                    styles.row,
-                    {borderLeftColor: item.color},
-                    unread && styles.rowUnread,
-                    pressed && styles.rowPressed,
-                  ]}
-                  onPress={() => onNavigate({name: 'room', key: item.key})}>
-                  <View style={styles.rowTop}>
-                    <Text style={[styles.rowTitle, unread && styles.rowTitleUnread]} numberOfLines={1}>
-                      {item.name}
-                    </Text>
-                    <Text style={[styles.rowTime, unread && styles.rowTimeUnread]}>
-                      {item.lastAt ? timeAgo(item.lastAt) : ''}
-                    </Text>
+      {/* No loading screen: the list is up from the start (from last launch's
+          rooms when there are any), pull-to-refresh works throughout, and
+          rows fill in as they load. */}
+      <SpringyPull atTop={() => scrollY.current <= 0} onRefresh={refreshAll} background={() => <PixelField />}>
+        <FlatList
+          data={rooms}
+          keyExtractor={r => r.key}
+          onScroll={e => (scrollY.current = e.nativeEvent.contentOffset.y)}
+          scrollEventThrottle={32}
+          contentContainerStyle={rooms.length === 0 ? styles.emptyContent : styles.listContent}
+          renderItem={({item}) => {
+            // Unread: bold, the preview in full color, a count badge, and a
+            // tinted row. Caught up: plain, with a muted preview.
+            const unread = item.unread || item.unreadCount > 0;
+            return (
+              <Pressable
+                style={({pressed}) => [
+                  styles.row,
+                  {borderLeftColor: item.color},
+                  unread && styles.rowUnread,
+                  pressed && styles.rowPressed,
+                ]}
+                onPress={() => onNavigate({name: 'room', key: item.key})}>
+                <View style={styles.rowTop}>
+                  <Text style={[styles.rowTitle, unread && styles.rowTitleUnread]} numberOfLines={1}>
+                    {item.name}
+                  </Text>
+                  <Text style={[styles.rowTime, unread && styles.rowTimeUnread]}>
+                    {item.lastAt ? timeAgo(item.lastAt) : ''}
+                  </Text>
+                </View>
+                <View style={styles.rowBottom}>
+                  <Text style={[styles.rowPreview, unread && styles.rowPreviewUnread]} numberOfLines={1}>
+                    {showServer ? item.server.replace(/^https?:\/\//, '') + ' · ' : ''}
+                    {item.preview ?? (unread ? 'New messages' : 'No messages yet')}
+                  </Text>
+                  {unread && (
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeText}>
+                        {item.unreadCount > 0 ? (item.unreadCount > 99 ? '99+' : item.unreadCount) : ''}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </Pressable>
+            );
+          }}
+          ListEmptyComponent={
+            loading ? (
+              // First ever load (nothing remembered yet): faint placeholder rows.
+              <View>
+                {[0.55, 0.4, 0.48].map((w, i) => (
+                  <View key={i} style={styles.skeletonRow}>
+                    <View style={[styles.skeletonBar, {width: `${w * 100}%`}]} />
+                    <View style={[styles.skeletonBar, styles.skeletonBarThin]} />
                   </View>
-                  <View style={styles.rowBottom}>
-                    <Text style={[styles.rowPreview, unread && styles.rowPreviewUnread]} numberOfLines={1}>
-                      {showServer ? item.server.replace(/^https?:\/\//, '') + ' · ' : ''}
-                      {item.preview ?? (unread ? 'New messages' : 'No messages yet')}
-                    </Text>
-                    {unread && (
-                      <View style={styles.badge}>
-                        <Text style={styles.badgeText}>
-                          {item.unreadCount > 0 ? (item.unreadCount > 99 ? '99+' : item.unreadCount) : ''}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-                </Pressable>
-              );
-            }}
-            ListEmptyComponent={
+                ))}
+              </View>
+            ) : (
               <View style={styles.center}>
                 <Text style={styles.emptyTitle}>No rooms yet</Text>
                 <Text style={styles.muted}>Rooms are invite-only. Tap + to start one, or join with an invite link.</Text>
               </View>
-            }
-          />
-        </SpringyPull>
-      )}
+            )
+          }
+        />
+      </SpringyPull>
 
       <Pressable
         style={({pressed}) => [styles.fab, pressed && styles.fabPressed]}
@@ -135,6 +140,9 @@ function makeStyles(theme: Theme) {
   return StyleSheet.create({
     container: {flex: 1, backgroundColor: theme.bg},
     center: {flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 32},
+    skeletonRow: {paddingHorizontal: 16, paddingVertical: 16, gap: 8, borderBottomWidth: 1, borderBottomColor: theme.border},
+    skeletonBar: {height: 12, borderRadius: 6, backgroundColor: theme.surfaceAlt, opacity: 0.6},
+    skeletonBarThin: {height: 9, width: '75%', opacity: 0.35},
     muted: {color: theme.textMuted, textAlign: 'center', maxWidth: 320},
     emptyTitle: {fontSize: 18, fontWeight: '800', color: theme.text},
     emptyContent: {flexGrow: 1},

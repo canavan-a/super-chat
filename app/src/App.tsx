@@ -19,6 +19,7 @@ import {
 
 import {useThemedAppIcon} from './appIcon';
 import {CrashScreen} from './components/CrashScreen';
+import {PixelField} from './components/PixelField';
 import {Icon, IconName} from './components/Icon';
 import {parseInviteLink} from './crypto';
 import {hasStoredIdentity, NEEDS_PASSPHRASE} from './keystore';
@@ -366,6 +367,8 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
           styles.header,
           showingRoomHeader && headerInfo!.accentColor ? {borderLeftWidth: 4, borderLeftColor: headerInfo!.accentColor} : null,
         ]}>
+        {/* The constellation carries on up through the header. */}
+        <PixelField />
         {route.name !== 'home' && (
           <Pressable style={styles.headerBack} onPress={goBack} accessibilityLabel="Back" hitSlop={8}>
             <Icon name="chevron-left" size={22} color={theme.text} />

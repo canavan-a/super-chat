@@ -5,12 +5,12 @@
 // swipe-away on most Android versions), on its own high-importance channel,
 // and re-posted on every check while the installed build is behind. It
 // clears itself once the installed version catches up.
-import notifee, {AndroidImportance, AuthorizationStatus} from '@notifee/react-native';
+import notifee, {AndroidImportance} from '@notifee/react-native';
 import {Alert, Linking} from 'react-native';
 
 import {compareVersions, fetchReleases, getVersionInfo} from '../appUpdater';
 import {notificationColor} from './messages';
-import {PREFER_SMALL_ICON, PRESS_ACTION} from './channels';
+import {ensureNotificationPermission, PREFER_SMALL_ICON, PRESS_ACTION} from './channels';
 import {SETTINGS_NAV} from './pendingNav';
 
 const CH_UPDATES = 'superchat-updates';
@@ -63,10 +63,7 @@ export async function checkForUpdate({force = false} = {}): Promise<void> {
  */
 export async function nagForPermission(): Promise<void> {
   try {
-    const now = await notifee.getNotificationSettings();
-    if (now.authorizationStatus === AuthorizationStatus.AUTHORIZED) return;
-    const res = await notifee.requestPermission();
-    if (res.authorizationStatus === AuthorizationStatus.AUTHORIZED) return;
+    if (await ensureNotificationPermission()) return;
     Alert.alert(
       'Notifications are off',
       "Super Chat can't tell you about new messages or app updates. Turn notifications on in Settings → Apps → Super Chat → Notifications.",

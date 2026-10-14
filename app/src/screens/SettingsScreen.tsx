@@ -175,12 +175,10 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
     setBgBusy(true);
     await settingsStore.update({bgNotifications: value});
     try {
-      const notifee = (await import('@notifee/react-native')).default;
+      const {ensureNotificationPermission} = await import('../notifications/channels');
       const {startMonitoring, stopMonitoring} = await import('../service/BackgroundMonitorService');
       if (value) {
-        const {AuthorizationStatus} = await import('@notifee/react-native');
-        const perm = await withTimeout(notifee.requestPermission(), 'asking for notification permission');
-        if (perm.authorizationStatus !== AuthorizationStatus.AUTHORIZED) {
+        if (!(await ensureNotificationPermission())) {
           throw new Error('Notifications are turned off for Super Chat. Turn them on in system settings, then try again.');
         }
         await withTimeout(startMonitoring(), 'starting the background connection');
@@ -200,10 +198,8 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
     }
   };
   const recheckPermission = async () => {
-    const notifee = (await import('@notifee/react-native')).default;
-    const {AuthorizationStatus} = await import('@notifee/react-native');
-    const res = await notifee.requestPermission();
-    const ok = res.authorizationStatus === AuthorizationStatus.AUTHORIZED;
+    const {ensureNotificationPermission} = await import('../notifications/channels');
+    const ok = await ensureNotificationPermission();
     setPermStatus(ok ? 'Allowed' : 'Denied');
     if (!ok) {
       Alert.alert('Notifications denied', 'Enable them in system Settings → Apps → Super Chat → Notifications.', [
@@ -222,11 +218,9 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
       ]);
     try {
       const notifee = (await import('@notifee/react-native')).default;
-      const {AuthorizationStatus} = await import('@notifee/react-native');
-      const {CH_MESSAGES} = await import('../notifications/channels');
+      const {CH_MESSAGES, ensureNotificationPermission} = await import('../notifications/channels');
       const {sendTestNotification} = await import('../notifications/messages');
-      const perm = await withTimeout(notifee.requestPermission(), 'asking for notification permission');
-      if (perm.authorizationStatus !== AuthorizationStatus.AUTHORIZED) {
+      if (!(await ensureNotificationPermission())) {
         setPermStatus('Denied');
         return fix('Notifications are turned off for Super Chat.', () => Linking.openSettings());
       }
@@ -337,7 +331,6 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
       />
     )}
     <ScrollView style={styles.scroll} contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-      <Text style={styles.title}>Settings</Text>
 
       <View style={styles.tabBar}>
         {SETTINGS_TABS.map(t => (

@@ -1,5 +1,5 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
+import {ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 
 import {Icon} from '../components/Icon';
 import {loadIdentity, NEEDS_PASSPHRASE} from '../keystore';
@@ -35,6 +35,9 @@ export function LockScreen({
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Unlocked: the app is getting the rooms ready. A spinner, not the Unlock
+  // button again (which looked like the unlock had missed or hung).
+  const [opening, setOpening] = useState(false);
 
   // Each attempt's number: a late answer from an attempt that already timed
   // out may still unlock, but mustn't overwrite a newer attempt's state.
@@ -56,7 +59,11 @@ export function LockScreen({
       try {
         const entropy = await loadIdentity(pass);
         if (entropy) {
-          onUnlock(entropy);
+          attempt.current++; // nothing after this may touch the screen's state
+          clearTimeout(timer);
+          setOpening(true);
+          // Let the spinner draw before the app starts building the rooms.
+          requestAnimationFrame(() => setTimeout(() => onUnlock(entropy), 0));
           return;
         }
         if (attempt.current !== mine) return;
@@ -98,10 +105,16 @@ export function LockScreen({
         // Clear air between the wordmark and the lock, and no caption: the
         // lock and the button say it.
         <View style={[styles.center, local.lockArea]}>
-          <Icon name="lock" size={28} color={theme.textMuted} />
-          <Pressable style={styles.primary} onPress={() => unlock()} disabled={busy}>
-            <Text style={styles.primaryText}>Unlock</Text>
-          </Pressable>
+          {opening ? (
+            <ActivityIndicator color={theme.textMuted} accessibilityLabel="Opening" />
+          ) : (
+            <>
+              <Icon name="lock" size={28} color={theme.textMuted} />
+              <Pressable style={styles.primary} onPress={() => unlock()} disabled={busy}>
+                <Text style={styles.primaryText}>Unlock</Text>
+              </Pressable>
+            </>
+          )}
         </View>
       )}
       {error && <Text style={styles.error}>{error}</Text>}
