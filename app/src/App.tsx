@@ -20,7 +20,8 @@ import {
 import {useThemedAppIcon} from './appIcon';
 import {handleVoiceAction} from './call/voiceService';
 import {RemoteAudio} from './call/RemoteAudio';
-import './call/voice';
+import {voice} from './call/voice';
+import {applyUpdateIfSafe, setThemeColor, startPwa} from './pwa/pwa';
 import {ChatAvatar} from './components/ChatAvatar';
 import {CrashScreen} from './components/CrashScreen';
 import {PixelField} from './components/PixelField';
@@ -515,10 +516,32 @@ function makeStyles(theme: Theme) {
   });
 }
 
+// Web: the installable app's service worker and update policy (src/pwa).
+// A new version only switches in (a reload) when nothing is lost: the app
+// is locked and not in voice, and either it just launched or it's hidden.
+const launchedAt = Date.now();
+startPwa(
+  () =>
+    !!session.get() ||
+    voice.active() ||
+    (typeof document !== 'undefined' && document.visibilityState === 'visible' && Date.now() - launchedAt > 8000),
+);
+session.subscribe(me => {
+  if (!me) applyUpdateIfSafe();
+});
+
+/** Keeps the browser's status bar / title bar in the theme's background (web). */
+function ThemeChrome(): null {
+  const theme = useTheme();
+  useEffect(() => setThemeColor(theme.bg), [theme.bg]);
+  return null;
+}
+
 function App(): React.JSX.Element {
   return (
     <CrashScreen>
       <ThemeProvider>
+        <ThemeChrome />
         <SplashGate>
           <AccountGate />
         </SplashGate>

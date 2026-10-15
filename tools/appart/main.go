@@ -12,6 +12,8 @@
 //	app/src/logo/iconPalette.json per-theme colors (a test checks the app agrees)
 //	app/android/app/src/main/res  adaptive + legacy launcher icons, one per
 //	                              theme, and the notification icon
+//	app/public/icons, splash      the web app's icons and iOS launch screens
+//	                              (dark theme, the app's default)
 //
 // Theme colors are read from app/src/theme.tsx, never copied.
 package main
@@ -213,6 +215,7 @@ func main() {
 	icon := crop(word)
 	must(writePalette(filepath.Join(*app, "src/logo/iconPalette.json"), pals, icon))
 	must(writeAndroid(filepath.Join(*app, "android/app/src/main/res"), pals, icon))
+	must(writeWeb(filepath.Join(*app, "public"), pals["dark"], mark, word, icon))
 	if *preview != "" {
 		must(writePreviews(*preview, pals, mark, word, icon))
 	}
@@ -460,7 +463,7 @@ func writeLegacyPNGs(res, theme string, p Palette, icon Grid) error {
 			if round {
 				name += "_round"
 			}
-			if err := writePNG(filepath.Join(res, "mipmap-"+d.name, name+".png"), renderIcon(p, icon, d.px, round, iconWidth(icon))); err != nil {
+			if err := writePNG(filepath.Join(res, "mipmap-"+d.name, name+".png"), renderIcon(p, icon, d.px, round, iconWidth(icon), 0.2)); err != nil {
 				return err
 			}
 		}
@@ -482,11 +485,12 @@ func writePNG(path string, img image.Image) error {
 
 // renderIcon rasterizes the bubble onto the theme's background in a rounded
 // square (or circle), supersampled 3x3 for clean edges.
-func renderIcon(p Palette, icon Grid, size int, round bool, widthFrac float64) *image.NRGBA {
+// corner is the corner radius as a fraction of the size (0: a full square).
+func renderIcon(p Palette, icon Grid, size int, round bool, widthFrac, corner float64) *image.NRGBA {
 	img := image.NewNRGBA(image.Rect(0, 0, size, size))
 	pw, ph, x0, y0 := iconGeom(icon, float64(size), widthFrac*float64(size))
 	const ss = 3
-	r := 0.2 * float64(size)
+	r := corner * float64(size)
 	for py := 0; py < size; py++ {
 		for px := 0; px < size; px++ {
 			var acc RGB
@@ -556,7 +560,7 @@ func writePreviews(dir string, pals map[string]Palette, mark, word, icon Grid) e
 		if err := writePNG(filepath.Join(dir, "logo_"+n+".png"), img); err != nil {
 			return err
 		}
-		if err := writePNG(filepath.Join(dir, "icon_"+n+".png"), renderIcon(p, icon, 256, false, iconWidth(icon))); err != nil {
+		if err := writePNG(filepath.Join(dir, "icon_"+n+".png"), renderIcon(p, icon, 256, false, iconWidth(icon), 0.2)); err != nil {
 			return err
 		}
 	}

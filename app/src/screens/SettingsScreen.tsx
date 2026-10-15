@@ -36,6 +36,7 @@ import {DEFAULT_SERVER, normalizeServer, QUICK_REACTIONS, settingsStore} from '.
 import {getMyAvatar, resetStore, setMyAvatar, useStore} from '../store';
 import {THEME_OPTIONS, Theme, useThemeSetting} from '../theme';
 import {VoiceSettings} from '../components/VoiceSettings';
+import {InstallCard} from '../components/InstallCard';
 
 type SettingsTab = 'general' | 'account';
 
@@ -456,6 +457,13 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
 
           <View style={styles.divider} />
           <VoiceSettings />
+
+          {Platform.OS === 'web' && (
+            <>
+              <View style={styles.divider} />
+              <InstallCard />
+            </>
+          )}
 
           {Platform.OS === 'android' && (
             <>

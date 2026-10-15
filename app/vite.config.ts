@@ -3,13 +3,15 @@ import path from 'path';
 import {defineConfig} from 'vite';
 import react from '@vitejs/plugin-react';
 
+import {pwa} from './pwa/vite-plugin';
+
 // Aliases "react-native" -> "react-native-web" so the exact same src/App.tsx
 // used by Metro (native/Android) renders in a browser here, with real Vite
 // dev-server HMR — see app/README.md. The server URL/auth token are runtime
 // settings (src/settings.ts, editable from the in-app Settings screen), not
 // build-time config, so there's nothing to inject here.
 export default defineConfig(({mode}) => ({
-  plugins: [react({include: /\.(jsx|js|tsx|ts)$/})],
+  plugins: [react({include: /\.(jsx|js|tsx|ts)$/}), pwa()],
   resolve: {
     alias: {
       // More specific "react-native/..." aliases must precede the generic
