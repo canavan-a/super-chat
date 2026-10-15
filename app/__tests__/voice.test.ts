@@ -691,3 +691,13 @@ describe('voice notification (Android foreground service)', () => {
     expect(calls.every(c => c === 'mic-open')).toBe(true);
   });
 });
+
+describe('voiceSummary', () => {
+  it("doesn't count you as someone else", () => {
+    const {voiceSummary} = require('../src/call/engine');
+    expect(voiceSummary(0, true)).toBe('Just you');
+    expect(voiceSummary(1, true)).toBe('You and 1 other');
+    expect(voiceSummary(3, true)).toBe('You and 3 others');
+    expect(voiceSummary(2, false)).toBe('2 in voice');
+  });
+});

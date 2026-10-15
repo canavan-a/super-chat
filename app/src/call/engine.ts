@@ -815,7 +815,8 @@ export function createVoiceEngine(deps: VoiceDeps) {
     ses.stopAudio = deps.startAudio(route =>
       setExtra({route, speakerOn: route === 'speaker'}),
     );
-    deps.setSpeaker(true);
+    // The platform reports the real route (a headset, if one is connected)
+    // right after; until then, assume the default.
     extra = {...extra, speakerOn: true, route: 'speaker'};
     // Someone known to be here: show their cards connecting right away.
     // Nobody: we're live at once (anyone joining later connects to us).
@@ -1055,3 +1056,10 @@ export function createVoiceEngine(deps: VoiceDeps) {
 }
 
 export type VoiceEngine = ReturnType<typeof createVoiceEngine>;
+
+/** Who's in a voice room, in words: "Just you", "You and 2 others", "3 in voice". */
+export function voiceSummary(others: number, mine: boolean): string {
+  if (!mine) return `${others} in voice`;
+  if (others === 0) return 'Just you';
+  return `You and ${others} ${others === 1 ? 'other' : 'others'}`;
+}

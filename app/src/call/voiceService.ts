@@ -6,7 +6,7 @@
 // while the app is in the foreground, which joining always is.
 import {PermissionsAndroid, Platform} from 'react-native';
 
-import type {VoiceView} from './engine';
+import {voiceSummary, type VoiceView} from './engine';
 
 export const VOICE_ACTIONS = {
   mute: 'voice-mute',
@@ -47,10 +47,9 @@ async function show(view: VoiceView, roomName: string) {
       import('../notifications/messages'),
     ]);
   await ch.ensureChannels();
-  const people = view.peers.length + 1;
   const status =
     view.phase === 'live'
-      ? `${people} ${people === 1 ? 'person' : 'people'}${
+      ? `${voiceSummary(view.peers.length, true)}${
           view.muted ? ' · Muted' : ''
         }${view.deafened ? ' · Sound off' : ''}`
       : view.signalingDown

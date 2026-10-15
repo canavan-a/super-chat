@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 
+import {voiceSummary} from '../call/engine';
 import {useVoice} from '../call/voice';
 import type {Route} from '../routes';
 import {getRoom, useStore} from '../store';
@@ -60,7 +61,6 @@ export function VoiceBar({
     : joining
     ? {color: AMBER, text: 'Connecting…'}
     : {color: theme.success, text: null};
-  const people = v.peers.length + 1;
   const narrow = width < 340;
   const styles = makeStyles(theme, status.color);
 
@@ -89,7 +89,7 @@ export function VoiceBar({
             style={[styles.sub, status.text ? {color: status.color} : null]}
             numberOfLines={1}>
             {status.text ??
-              `${people} in voice${
+              `${voiceSummary(v.peers.length, true)}${
                 !narrow && v.startedAt ? ` · ${elapsed(v.startedAt, now)}` : ''
               }${v.muted ? ' · Muted' : ''}`}
             {v.audioBlocked ? ' · Tap to enable audio' : ''}

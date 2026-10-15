@@ -1,6 +1,7 @@
 import React, {useMemo, useRef, useState} from 'react';
 import {FlatList, Pressable, StyleSheet, Text, View} from 'react-native';
 
+import {voiceSummary} from '../call/engine';
 import {roomVoice, useVoice} from '../call/voice';
 import {ChatAvatar} from '../components/ChatAvatar';
 import {Icon} from '../components/Icon';
@@ -31,8 +32,15 @@ export function RoomListScreen({
   const scrollY = useRef(0);
   const showServer = new Set(rooms.map(r => r.server)).size > 1;
   useVoice();
-  // Rooms with someone in voice, and how many.
-  const inVoice = useStore(() => Object.fromEntries(rooms.map(r => [r.key, roomVoice(r.key).count])));
+  // Rooms with someone in voice: how many others, and whether we are.
+  const inVoice = useStore(() =>
+    Object.fromEntries(
+      rooms.map(r => {
+        const v = roomVoice(r.key);
+        return [r.key, {others: v.others.length, mine: v.mine}];
+      }),
+    ),
+  );
 
   const go = (route: Route) => {
     setAddOpen(false);
@@ -70,10 +78,17 @@ export function RoomListScreen({
                     <Text style={[styles.rowTitle, unread && styles.rowTitleUnread]} numberOfLines={1}>
                       {item.name}
                     </Text>
-                    {inVoice[item.key] ? (
-                      <View style={styles.voiceBadge} accessibilityLabel={`${inVoice[item.key]} in voice`}>
+                    {inVoice[item.key]?.others || inVoice[item.key]?.mine ? (
+                      <View
+                        style={styles.voiceBadge}
+                        accessibilityLabel={voiceSummary(inVoice[item.key].others, inVoice[item.key].mine)}>
                         <Icon name="volume-2" size={12} color={theme.success} />
-                        <Text style={styles.voiceBadgeText}>{inVoice[item.key]}</Text>
+                        {/* How many others; just the icon when it's only you. */}
+                        {inVoice[item.key].others ? (
+                          <Text style={styles.voiceBadgeText}>
+                            {inVoice[item.key].mine ? `You + ${inVoice[item.key].others}` : inVoice[item.key].others}
+                          </Text>
+                        ) : null}
                       </View>
                     ) : null}
                     <Text style={[styles.rowTime, unread && styles.rowTimeUnread]}>

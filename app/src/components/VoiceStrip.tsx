@@ -4,7 +4,7 @@ import React, {useEffect} from 'react';
 import {Pressable, StyleSheet, Text, View} from 'react-native';
 
 import {openVoice} from '../call/actions';
-import {MAX_PEERS} from '../call/engine';
+import {MAX_PEERS, voiceSummary} from '../call/engine';
 import {roomVoice, useVoice, voice} from '../call/voice';
 import type {Route} from '../routes';
 import {getRoom, useStore} from '../store';
@@ -50,7 +50,7 @@ export function VoiceStrip({
       ]}
       onPress={() => openVoice(roomKey, onNavigate)}
       accessibilityRole="button"
-      accessibilityLabel={`${rv.count} in voice. ${label}`}>
+      accessibilityLabel={`${voiceSummary(rv.others.length, rv.mine)}. ${label}`}>
       <Icon name="volume-2" size={16} color={theme.success} />
       <View style={styles.faces}>
         {members.slice(0, 5).map((m, i) => (
@@ -65,7 +65,7 @@ export function VoiceStrip({
         ))}
       </View>
       <Text style={[styles.text, {color: theme.text}]} numberOfLines={1}>
-        {rv.count} in voice
+        {voiceSummary(rv.others.length, rv.mine)}
       </Text>
       <View
         style={[
