@@ -105,7 +105,7 @@ describe('sharing and adding', () => {
                 : label.test(String(t.props.children))),
           ).length > 0,
       )
-      .at(-1);
+      .at(-1)!;
   // All visible text, joined (the sheet's list doesn't serialize as JSON).
   const texts = (tree: renderer.ReactTestRenderer) =>
     tree.root

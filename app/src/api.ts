@@ -187,7 +187,4 @@ export const api = {
   /** Admins: marks an uploaded blob as the room's group picture ("" clears it). */
   setPicture: (server: string, room: string, by: Signer, blob: string) =>
     request<void>(server, 'PUT', `/v1/rooms/${room}/picture`, by, {blob}),
-  /** The STUN/TURN servers (and short-lived TURN credentials) this server offers for voice. */
-  turn: (server: string, room: string, by: Signer) =>
-    request<{urls: string[]; username?: string; credential?: string; ttl?: number}>(server, 'GET', `/v1/rooms/${room}/turn`, by),
 };

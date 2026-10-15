@@ -1,6 +1,6 @@
 // Settings → Voice: the STUN/TURN servers this device uses for voice (an
-// editable list, which may be empty), the chat server's relay, and relay-only
-// mode. These stay on this device: they're never synced or sent to anyone.
+// editable list, which may be empty: added by hand or from a server shared in
+// a chat) and relay-only mode. These stay on this device: they're never synced or sent to anyone.
 import React, {useEffect, useRef, useState} from 'react';
 import {
   ActivityIndicator,
@@ -64,7 +64,7 @@ export function VoiceSettings(): React.JSX.Element {
   const setList = (iceServers: IceServerEntry[]) =>
     settingsStore.update({iceServers});
   const coverage = settingsCoverage(s);
-  const hasTurn = coverage === 'turn' || s.useServerRelay;
+  const hasTurn = coverage === 'turn';
 
   const status =
     coverage === 'turn'
@@ -72,15 +72,11 @@ export function VoiceSettings(): React.JSX.Element {
       : coverage === 'stun-only'
       ? {
           color: AMBER,
-          text: s.useServerRelay
-            ? "STUN only on this device. The chat server's relay is used if it has one; otherwise some connections will fail."
-            : 'STUN only: some connections will fail (e.g. on mobile data). Add a TURN server.',
+          text: 'STUN only: some connections will fail (e.g. on mobile data). Add a TURN server.',
         }
       : {
-          color: s.useServerRelay ? AMBER : theme.danger,
-          text: s.useServerRelay
-            ? "No servers on this device: voice relies on the chat server's relay, if it has one."
-            : 'No servers: voice only works on the same network.',
+          color: theme.danger,
+          text: 'No servers: voice only works on the same network.',
         };
 
   // The server the form currently describes (or what's still missing).
@@ -415,7 +411,7 @@ export function VoiceSettings(): React.JSX.Element {
               onPress={() =>
                 platformConfirm(
                   'Delete all servers?',
-                  'Remove every STUN and TURN server from this device? Voice will then only connect on the same network (or through the chat server’s relay, if it has one).',
+                  'Remove every STUN and TURN server from this device? Voice will then only connect on the same network.',
                   'Delete all',
                   () => setList([]),
                 )
@@ -435,26 +431,11 @@ export function VoiceSettings(): React.JSX.Element {
 
       <View style={styles.switchRow}>
         <View style={styles.flex}>
-          <Text style={styles.label}>
-            Use the chat server's relay when available
-          </Text>
-          <Text style={styles.hint}>
-            Your chat server may offer its own TURN relay, with credentials that
-            expire.
-          </Text>
-        </View>
-        <Switch
-          value={s.useServerRelay}
-          onValueChange={v => settingsStore.update({useServerRelay: v})}
-        />
-      </View>
-      <View style={styles.switchRow}>
-        <View style={styles.flex}>
           <Text style={styles.label}>Relay all voice (hide IP)</Text>
           <Text style={styles.hint}>
             {hasTurn
               ? 'Always go through a TURN relay, so people you talk to never see your IP address. Uses more of the relay.'
-              : 'Needs a TURN server (yours, or the chat server’s).'}
+              : 'Needs a TURN server in the list above.'}
           </Text>
         </View>
         <Switch

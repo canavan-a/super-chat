@@ -11,7 +11,6 @@ import {
   onRtc,
   onServerReady,
   sendRtc,
-  serverTurn,
   subscribe,
   voicePresence,
   type VoicePresence,
@@ -31,7 +30,6 @@ export const voice = createVoiceEngine({
   startAudio: onRoute => rtcPlatform.startAudio(onRoute),
   setSpeaker: on => rtcPlatform.setSpeaker(on),
   send: sendRtc,
-  serverTurn: key => serverTurn(key),
   settings: () => settingsStore.get(),
   nameOf: (key, member) => {
     const r = getRoom(key);

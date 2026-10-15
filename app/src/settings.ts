@@ -52,8 +52,6 @@ export interface Settings {
   // this device only: never synced in the vault or sent to anyone. TURN
   // passwords only grant relay use; voice media is encrypted end to end.
   iceServers: IceServerEntry[];
-  // Also use the chat server's relay (GET /v1/rooms/:id/turn) when it has one.
-  useServerRelay: boolean;
   // Send all voice through a TURN relay, so peers never see this device's IP.
   relayOnlyVoice: boolean;
 }
@@ -74,7 +72,6 @@ const DEFAULT_SETTINGS: Settings = {
   splashAutoDisabled: false,
   lastRoom: null,
   iceServers: DEFAULT_ICE_SERVERS,
-  useServerRelay: true,
   relayOnlyVoice: false,
 };
 

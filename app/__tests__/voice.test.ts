@@ -129,49 +129,28 @@ describe('tuneSdp', () => {
 });
 
 describe('ICE config', () => {
-  const base = {
-    iceServers: DEFAULT_ICE_SERVERS,
-    useServerRelay: true,
-    relayOnlyVoice: false,
-  };
-  const serverTurn = {
-    urls: ['stun:t.example:3478', 'turn:t.example:3478'],
-    username: 'u',
-    credential: 'c',
-  };
+  const base = {iceServers: DEFAULT_ICE_SERVERS, relayOnlyVoice: false};
+  const turn = {urls: 'turn:t.example:3478', username: 'u', credential: 'c'};
 
-  it('merges and de-duplicates sources, with credentials only on TURN', () => {
-    const cfg = buildIceConfig(
-      {...base, iceServers: [...DEFAULT_ICE_SERVERS, ...DEFAULT_ICE_SERVERS]},
-      serverTurn,
-    );
+  it("uses only this device's list, de-duplicated, with credentials only on TURN", () => {
+    const cfg = buildIceConfig({
+      ...base,
+      iceServers: [...DEFAULT_ICE_SERVERS, ...DEFAULT_ICE_SERVERS, {urls: 'stun:s.example', username: 'x', credential: 'y'}, turn],
+    });
     expect(cfg.iceServers).toEqual([
       {urls: 'stun:stun.l.google.com:19302'},
-      {urls: 'stun:t.example:3478'},
+      {urls: 'stun:s.example'},
       {urls: 'turn:t.example:3478', username: 'u', credential: 'c'},
     ]);
     expect(iceCoverage(cfg)).toBe('turn');
-  });
-
-  it('skips the server relay when switched off or unavailable', () => {
-    expect(
-      iceCoverage(buildIceConfig({...base, useServerRelay: false}, serverTurn)),
-    ).toBe('stun-only');
-    expect(iceCoverage(buildIceConfig(base, null))).toBe('stun-only');
-    expect(iceCoverage(buildIceConfig({...base, iceServers: []}, null))).toBe(
-      'none',
-    );
+    expect(iceCoverage(buildIceConfig(base))).toBe('stun-only');
+    expect(iceCoverage(buildIceConfig({...base, iceServers: []}))).toBe('none');
     expect(settingsCoverage({...base, iceServers: []})).toBe('none');
   });
 
   it('only goes relay-only when there is a relay', () => {
-    expect(
-      buildIceConfig({...base, relayOnlyVoice: true}, null).iceTransportPolicy,
-    ).toBe('all');
-    expect(
-      buildIceConfig({...base, relayOnlyVoice: true}, serverTurn)
-        .iceTransportPolicy,
-    ).toBe('relay');
+    expect(buildIceConfig({...base, relayOnlyVoice: true}).iceTransportPolicy).toBe('all');
+    expect(buildIceConfig({...base, iceServers: [turn], relayOnlyVoice: true}).iceTransportPolicy).toBe('relay');
   });
 
   it('validates URLs', () => {
@@ -336,7 +315,6 @@ async function flush() {
 function network(
   settings = {
     iceServers: DEFAULT_ICE_SERVERS,
-    useServerRelay: false,
     relayOnlyVoice: false,
   },
 ) {
@@ -374,15 +352,6 @@ function network(
           Promise.resolve().then(() => l.forEach(fn => fn(ROOM, member, msg)));
         }
         return true;
-      },
-      serverTurn: async () => {
-        (c as any).turnCalls = ((c as any).turnCalls ?? 0) + 1;
-        return {
-          urls: ['turn:t.example:3478'],
-          username: 'u',
-          credential: 'p',
-          ttl: 3600,
-        };
       },
       settings: () => settings,
       nameOf: (_k, m) => m,
@@ -589,8 +558,7 @@ describe('voice engine', () => {
   it('asks before joining with no STUN/TURN servers', async () => {
     const a = network({
       iceServers: [],
-      useServerRelay: false,
-      relayOnlyVoice: false,
+        relayOnlyVoice: false,
     }).add('A');
     await join(a);
     expect(a.engine.getView().phase).toBe('confirm-no-servers');
@@ -632,12 +600,8 @@ describe('voice pre-warming', () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => jest.useRealTimers());
 
-  it('joins on connections that were already gathering, without refetching relay credentials', async () => {
-    const net = network({
-      iceServers: DEFAULT_ICE_SERVERS,
-      useServerRelay: true,
-      relayOnlyVoice: false,
-    });
+  it('joins on connections that were already gathering', async () => {
+    const net = network();
     const a = net.add('A');
     const b = net.add('B');
     const c = net.add('C');
@@ -647,15 +611,12 @@ describe('voice pre-warming', () => {
     connectAll(a, b);
 
     // C has the room's chat open while A and B talk.
-    const turnCalls = () => (c as any).turnCalls as number;
     await c.engine.prewarm(ROOM, 2);
     expect(c.pcs).toHaveLength(2);
-    expect(turnCalls()).toBe(1);
     const warmed = [...c.pcs];
 
     await join(c);
     await flush();
-    expect(turnCalls()).toBe(1); // cached
     expect(used(c).sort()).toEqual(warmed.sort());
     expect(c.engine.getView().phase).toBe('connecting'); // cards up at once
     connectAll(a, b, c);

@@ -13,7 +13,6 @@ import {
   buildIceConfig,
   iceCoverage,
   type IceCoverage,
-  type ServerTurn,
   type VoiceIceSettings,
 } from './iceConfig';
 import {
@@ -42,7 +41,7 @@ export type AudioRoute = 'speaker' | 'earpiece' | 'headset';
 
 export type Phase =
   | 'idle'
-  | 'config' // fetching the server's relay, building the ICE config
+  | 'config' // building the ICE config from this device's servers
   | 'confirm-no-servers' // waiting on the "no STUN/TURN servers" popup
   | 'mic' // asking for / opening the microphone
   | 'finding' // join sent, waiting for here/full replies
@@ -153,7 +152,6 @@ export interface VoiceDeps {
   startAudio(onRoute: (r: AudioRoute) => void): () => void;
   setSpeaker(on: boolean): void;
   send(roomKey: string, to: string, s: Signal): boolean;
-  serverTurn(roomKey: string): Promise<ServerTurn | null>;
   settings(): VoiceIceSettings;
   nameOf(roomKey: string, member: string): string;
   roomExists(roomKey: string): boolean;
@@ -649,10 +647,9 @@ export function createVoiceEngine(deps: VoiceDeps) {
 
   // ---- pre-warming ----
   //
-  // While a room's chat is open and someone is in its voice, we fetch the
-  // relay credentials and keep peer connections gathering ICE candidates
-  // (iceCandidatePoolSize), one per person there. Joining then skips the
-  // network round trips: the config is ready and each connection's
+  // While a room's chat is open and someone is in its voice, we keep peer
+  // connections gathering ICE candidates (iceCandidatePoolSize), one per
+  // person there. Joining then skips that wait: each connection's
   // candidates already are. Nothing touches the microphone until Join.
   // Inside voice, one warmed connection waits for the next person to join.
 
@@ -664,32 +661,8 @@ export function createVoiceEngine(deps: VoiceDeps) {
     timer: ReturnType<typeof setTimeout> | null;
   }
   let warm: Warm | null = null;
-  const turnCache = new Map<string, {turn: ServerTurn | null; until: number}>();
-
-  async function serverTurnCached(roomKey: string): Promise<ServerTurn | null> {
-    const hit = turnCache.get(roomKey);
-    if (hit && hit.until > deps.now()) return hit.turn;
-    let turn: ServerTurn | null = null;
-    try {
-      turn = await deps.serverTurn(roomKey);
-    } catch {
-      turn = null; // carry on with what this device has
-    }
-    // Credentials are good for `ttl`; refresh a minute early. A failure is
-    // retried soon.
-    const life = turn?.ttl
-      ? Math.max(60_000, turn.ttl * 1000 - 60_000)
-      : turn
-      ? 10 * 60_000
-      : 60_000;
-    turnCache.set(roomKey, {turn, until: deps.now() + life});
-    return turn;
-  }
-
-  async function iceConfigFor(roomKey: string): Promise<RTCConfiguration> {
-    const s = deps.settings();
-    const turn = s.useServerRelay ? await serverTurnCached(roomKey) : null;
-    return {...buildIceConfig(s, turn), iceCandidatePoolSize: 1};
+  async function iceConfigFor(_roomKey: string): Promise<RTCConfiguration> {
+    return {...buildIceConfig(deps.settings()), iceCandidatePoolSize: 1};
   }
 
   function closeWarm() {

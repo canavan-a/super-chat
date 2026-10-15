@@ -887,12 +887,6 @@ export function voicePresence(key: string): VoicePresence[] {
   return Object.values(r.voice).filter(p => p.expires > now);
 }
 
-/** The chat server's own STUN/TURN offer for this room, or null. */
-export async function serverTurn(key: string) {
-  const r = rooms.get(key);
-  if (!r) return null;
-  return api.turn(r.server, r.id, r.me);
-}
 
 function probeVoice(r: Room) {
   sendRtc(r.key, '', {sid: deviceSid, k: 'probe'});

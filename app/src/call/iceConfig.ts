@@ -1,7 +1,7 @@
-// Which STUN/TURN servers voice uses: the ones configured on this device
-// (Settings → Voice), plus the chat server's own relay when it offers one
-// and that's switched on. Each side of a call uses its own list; a relay
-// candidate from your TURN server works for any peer.
+// Which STUN/TURN servers voice uses: the ones on this device's list
+// (Settings → Voice), whether added by hand or from a server someone shared
+// in a chat. Each side of a call uses its own list; a relay candidate from
+// your TURN server works for any peer.
 
 export interface IceServerEntry {
   urls: string;
@@ -11,16 +11,7 @@ export interface IceServerEntry {
 
 export interface VoiceIceSettings {
   iceServers: IceServerEntry[];
-  useServerRelay: boolean;
   relayOnlyVoice: boolean;
-}
-
-/** What GET /v1/rooms/:id/turn returns. */
-export interface ServerTurn {
-  urls: string[];
-  username?: string;
-  credential?: string;
-  ttl?: number;
 }
 
 export type IceCoverage = 'none' | 'stun-only' | 'turn';
@@ -49,10 +40,7 @@ export function validateIceUrl(url: string): string | null {
 
 export const isTurnUrl = (url: string) => /^turns?:/.test(url.trim());
 
-export function buildIceConfig(
-  s: VoiceIceSettings,
-  serverTurn: ServerTurn | null,
-): RTCConfiguration {
+export function buildIceConfig(s: VoiceIceSettings): RTCConfiguration {
   const servers: RTCIceServer[] = [];
   const seen = new Set<string>();
   const add = (urls: string, username?: string, credential?: string) => {
@@ -72,15 +60,6 @@ export function buildIceConfig(
       isTurnUrl(e.urls) ? e.username : undefined,
       isTurnUrl(e.urls) ? e.credential : undefined,
     );
-  if (s.useServerRelay && serverTurn) {
-    for (const u of serverTurn.urls) {
-      add(
-        u,
-        isTurnUrl(u) ? serverTurn.username : undefined,
-        isTurnUrl(u) ? serverTurn.credential : undefined,
-      );
-    }
-  }
   const cfg: RTCConfiguration = {
     iceServers: servers,
     iceCandidatePoolSize: 0,
