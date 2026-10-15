@@ -24,6 +24,8 @@ export interface RoomView {
   id: string;
   name: string | null;
   color: string | null;
+  /** The group picture (set by an admin, like the name), or null. */
+  picture: AvatarRef | null;
   members: MemberView[];
   invites: InviteView[];
   retentionDays: number;
@@ -69,11 +71,20 @@ export function replay(room: string, events: SignedEvent[]): ReplayResult {
   return {state, events: parsed, commits};
 }
 
+function asAvatarRef(a: unknown): AvatarRef | null {
+  const r = a as AvatarRef | null | undefined;
+  return r && typeof r.blob === 'string' && typeof r.key === 'string' ? {blob: r.blob, key: r.key, at: Number(r.at) || 0} : null;
+}
+
 export function roomView(r: ReplayResult, keys: Record<number, Uint8Array>): RoomView {
-  let name: string | null = null;
+  // undefined: no meta event read yet; "" : the name was cleared.
+  let name: string | undefined;
   let color: string | null = null;
   let snapName: string | null = null;
   let snapColor: string | null = null;
+  // undefined: no meta event has said anything about the picture yet.
+  let picture: AvatarRef | null | undefined;
+  let snapPicture: AvatarRef | null = null;
   const names: Record<string, string> = {};
   const avatars: Record<string, AvatarRef> = {};
   let wiped: {by: string; at: number} | null = null;
@@ -83,15 +94,18 @@ export function roomView(r: ReplayResult, keys: Record<number, Uint8Array>): Roo
   for (const e of r.events) {
     switch (e.kind) {
       case 'meta': {
-        const m = openEnc<{name?: string; color?: string}>(e, keys);
-        if (m?.name) name = String(m.name).slice(0, 80);
+        const m = openEnc<{name?: string; color?: string; picture?: AvatarRef | null}>(e, keys);
+        if (m && typeof m.name === 'string') name = m.name.slice(0, 80);
         if (m?.color) color = String(m.color);
+        // Present: the current picture; null: removed; absent: unchanged.
+        if (m && 'picture' in m) picture = asAvatarRef(m.picture);
         break;
       }
       case 'epoch': {
-        const snap = openEnc<{name?: string; color?: string; profiles?: Record<string, string>}>(e, keys);
-        if (snap?.name) snapName = String(snap.name).slice(0, 80);
+        const snap = openEnc<{name?: string; color?: string; picture?: AvatarRef | null; profiles?: Record<string, string>}>(e, keys);
+        if (snap && typeof snap.name === 'string') snapName = snap.name.slice(0, 80) || null;
         if (snap?.color) snapColor = String(snap.color);
+        if (snap && 'picture' in snap) snapPicture = asAvatarRef(snap.picture);
         for (const [id, n] of Object.entries(snap?.profiles ?? {})) snapNames[id] = String(n).slice(0, 40);
         break;
       }
@@ -125,8 +139,9 @@ export function roomView(r: ReplayResult, keys: Record<number, Uint8Array>): Roo
     id: s.room,
     // Only admins can author meta; a snapshot is a fallback for members who
     // joined after the last meta event.
-    name: name ?? snapName,
+    name: name === undefined ? snapName : name || null,
     color: color ?? snapColor,
+    picture: picture === undefined ? snapPicture : picture,
     members: Object.keys(s.members)
       .sort((a, b) => (s.members[a] === s.members[b] ? 0 : s.members[a] === 'admin' ? -1 : 1))
       .map(id => ({id, role: s.members[id], name: allNames[id] ?? null})),

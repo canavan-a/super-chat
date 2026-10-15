@@ -67,7 +67,10 @@ type Blob struct {
 	MessageID *string
 	// Avatar marks the uploader's profile picture in this room (at most
 	// one each): readable by every member, kept by the sweeper.
-	Avatar    bool
+	Avatar bool
+	// Picture marks the room's group picture (at most one per room):
+	// readable by every member, kept by the sweeper.
+	Picture   bool
 	Size      int64
 	CreatedAt int64 `gorm:"autoCreateTime:false"`
 }

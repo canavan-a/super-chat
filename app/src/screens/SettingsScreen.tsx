@@ -35,6 +35,7 @@ import {session} from '../session';
 import {DEFAULT_SERVER, normalizeServer, QUICK_REACTIONS, settingsStore} from '../settings';
 import {getMyAvatar, resetStore, setMyAvatar, useStore} from '../store';
 import {THEME_OPTIONS, Theme, useThemeSetting} from '../theme';
+import {VoiceSettings} from '../components/VoiceSettings';
 
 type SettingsTab = 'general' | 'account';
 
@@ -452,6 +453,9 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
               <Text style={styles.testButtonText}>Add</Text>
             </Pressable>
           </View>
+
+          <View style={styles.divider} />
+          <VoiceSettings />
 
           {Platform.OS === 'android' && (
             <>

@@ -11,6 +11,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Voice rooms (src/call/): the microphone, audio routing (speaker,
+         earpiece, Bluetooth headsets), and a microphone-type foreground
+         service so voice keeps going with the app in the background. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <application
       android:name=".MainApplication"
@@ -27,10 +34,11 @@
            see app/src/service/BackgroundMonitorService.ts. tools:replace is
            needed because Notifee's AAR merges in this service without a
            type, and Android 14+ requires a foreground service type matching
-           a held permission (FOREGROUND_SERVICE_DATA_SYNC, above). -->
+           a held permission (FOREGROUND_SERVICE_DATA_SYNC, above; MICROPHONE
+           while in a voice room, see src/call/voiceService.ts). -->
       <service
         android:name="app.notifee.core.ForegroundService"
-        android:foregroundServiceType="dataSync"
+        android:foregroundServiceType="dataSync|microphone"
         android:exported="false"
         tools:replace="android:foregroundServiceType" />
 

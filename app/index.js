@@ -11,6 +11,7 @@ import App from './src/App';
 import {name as appName} from './app.json';
 import {navTarget, pendingNav} from './src/notifications/pendingNav';
 import {backgroundRunner} from './src/service/BackgroundMonitorService';
+import {handleVoiceAction} from './src/call/voiceService';
 
 // Registers the function Notifee's foreground service runs. Must happen at
 // module top level, before AppRegistry.registerComponent.
@@ -21,6 +22,8 @@ notifee.registerForegroundService(() => backgroundRunner());
 // (Killed app: notifee.getInitialNotification() in App.tsx. Foreground:
 // notifee.onForegroundEvent, also in App.tsx.)
 notifee.onBackgroundEvent(async ({type, detail}) => {
+  // The voice notification's Mute / Sound off / Leave (src/call/voiceService.ts).
+  if (type === EventType.ACTION_PRESS && handleVoiceAction(detail.pressAction?.id)) return;
   if (type === EventType.PRESS) {
     const target = navTarget(detail.notification?.data);
     if (target) pendingNav.set(target);

@@ -1,6 +1,8 @@
 import React, {useEffect, useMemo, useState} from 'react';
 import {ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View} from 'react-native';
 
+import {randomChatName} from '../chatNames';
+import {Icon} from '../components/Icon';
 import {parseInviteLink} from '../crypto';
 import {Route} from '../routes';
 import {settingsStore} from '../settings';
@@ -12,6 +14,8 @@ export function NewRoomScreen({onNavigate}: {onNavigate: (route: Route) => void}
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const s = settingsStore.get();
   const [name, setName] = useState('');
+  // Used when the name is left blank; tap the dice to get another.
+  const [suggested, setSuggested] = useState(randomChatName);
   const [color, setColor] = useState(ROOM_COLORS[Math.floor(Math.random() * (ROOM_COLORS.length - 1))]);
   const [displayName, setDisplayName] = useState(s.displayName);
   const [retention, setRetention] = useState(30);
@@ -19,13 +23,13 @@ export function NewRoomScreen({onNavigate}: {onNavigate: (route: Route) => void}
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const ok = name.trim() && displayName.trim() && server.trim();
+  const ok = displayName.trim() && server.trim();
   const submit = async () => {
     setBusy(true);
     setError(null);
     try {
       if (!s.displayName) await settingsStore.update({displayName: displayName.trim()});
-      const key = await createRoom(server, name.trim(), color, retention, displayName.trim());
+      const key = await createRoom(server, name.trim() || suggested, color, retention, displayName.trim());
       onNavigate({name: 'room', key});
     } catch (e) {
       setError((e as Error).message);
@@ -36,8 +40,21 @@ export function NewRoomScreen({onNavigate}: {onNavigate: (route: Route) => void}
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-      <Text style={styles.label}>Room name</Text>
-      <TextInput style={styles.input} value={name} onChangeText={setName} maxLength={80} placeholder="e.g. Family" placeholderTextColor={theme.textMuted} />
+      <Text style={styles.label}>Chat name (optional)</Text>
+      <View style={styles.inline}>
+        <TextInput
+          style={[styles.input, styles.flex]}
+          value={name}
+          onChangeText={setName}
+          maxLength={80}
+          placeholder={suggested}
+          placeholderTextColor={theme.textMuted}
+        />
+        <Pressable style={styles.iconButton} onPress={() => setSuggested(randomChatName())} accessibilityLabel="Suggest another name">
+          <Icon name="retry" size={18} color={theme.text} />
+        </Pressable>
+      </View>
+      <Text style={styles.help}>Leave it blank to use the suggestion. A one-to-one chat shows the other person's name instead.</Text>
       <View style={styles.swatches}>
         {ROOM_COLORS.map(c => (
           <Pressable key={c} onPress={() => setColor(c)} style={[styles.swatch, {backgroundColor: c}, color === c && styles.swatchOn]} />
@@ -68,7 +85,7 @@ export function NewRoomScreen({onNavigate}: {onNavigate: (route: Route) => void}
       <Text style={styles.help}>The server stores the room's ciphertext. It can't read names, messages or files.</Text>
 
       <Pressable style={[styles.primary, (!ok || busy) && styles.disabled]} disabled={!ok || busy} onPress={submit}>
-        {busy ? <ActivityIndicator color={theme.primaryText} /> : <Text style={styles.primaryText}>Create room</Text>}
+        {busy ? <ActivityIndicator color={theme.primaryText} /> : <Text style={styles.primaryText}>Create chat</Text>}
       </Pressable>
       {error && <Text style={styles.error}>{error}</Text>}
     </ScrollView>
@@ -186,6 +203,9 @@ function makeStyles(theme: Theme) {
       backgroundColor: theme.surface,
       fontSize: 15,
     },
+    inline: {flexDirection: 'row', alignItems: 'center', gap: 8},
+    flex: {flex: 1, minWidth: 0},
+    iconButton: {padding: 8, borderRadius: 6, backgroundColor: theme.surfaceAlt},
     linkInput: {minHeight: 70, fontFamily: 'monospace', fontSize: 13, textAlignVertical: 'top'},
     swatches: {flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10},
     swatch: {width: 28, height: 28, borderRadius: 14, borderWidth: 2, borderColor: 'transparent'},

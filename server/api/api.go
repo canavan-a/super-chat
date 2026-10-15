@@ -39,6 +39,7 @@ type API struct {
 	blobsPerAcct *limiter
 	blobsPerIP   *limiter
 	readsPerAcct *limiter
+	turnPerAcct  *limiter
 }
 
 func New(db *gorm.DB, cfg config.Config, svc *rooms.Service) *API {
@@ -54,6 +55,7 @@ func New(db *gorm.DB, cfg config.Config, svc *rooms.Service) *API {
 		// alone don't cap one client; these per-IP ones do.
 		blobsPerIP:   newLimiter(40, time.Hour),
 		readsPerAcct: newLimiter(1200, time.Minute),
+		turnPerAcct:  newLimiter(60, time.Hour),
 	}
 	svc.OnEvent = a.onEvent
 	svc.OnRemoved = a.onRemoved
@@ -104,8 +106,10 @@ func (a *API) Router() *gin.Engine {
 	signed.GET("/rooms/:id/messages", a.rateLimit(a.readsPerAcct, byAcct), a.listMessages)
 	signed.POST("/rooms/:id/messages", a.rateLimit(a.msgsPerIP, byIP), a.rateLimit(a.msgsPerAcct, byAcct), a.postMessage)
 	signed.GET("/rooms/:id/invites/uses", a.rateLimit(a.readsPerAcct, byAcct), a.inviteUses)
+	signed.GET("/rooms/:id/turn", a.rateLimit(a.turnPerAcct, byAcct), a.turnCreds)
 	signed.GET("/rooms/:id/blobs/:blob", a.rateLimit(a.readsPerAcct, byAcct), a.getBlob)
 	signed.PUT("/rooms/:id/avatar", a.rateLimit(a.blobsPerAcct, byAcct), a.putAvatar)
+	signed.PUT("/rooms/:id/picture", a.rateLimit(a.blobsPerAcct, byAcct), a.putPicture)
 	signed.POST("/invites/:id/join", a.rateLimit(a.joinsPerIP, byIP), a.joinInvite)
 
 	blobs := v1.Group("", a.requireSignature(a.cfg.MaxBlobBytes))
@@ -375,12 +379,12 @@ func (a *API) getBlob(c *gin.Context) {
 		return
 	}
 	// Only blobs attached to a message the caller may read, members'
-	// avatars, or the caller's own upload in flight.
+	// avatars, the group picture, or the caller's own upload in flight.
 	var n int64
 	a.db.Raw(`
 		SELECT COUNT(*) FROM blobs b LEFT JOIN messages msg ON msg.id = b.message_id
 		WHERE b.id = ? AND b.room_id = ?
-		  AND ((msg.id IS NOT NULL AND msg.epoch >= ?) OR b.avatar = 1 OR (b.message_id IS NULL AND b.uploader = ?))`,
+		  AND ((msg.id IS NOT NULL AND msg.epoch >= ?) OR b.avatar = 1 OR b.picture = 1 OR (b.message_id IS NULL AND b.uploader = ?))`,
 		c.Param("blob"), st.Room, m.FirstEpoch, caller(c)).Scan(&n)
 	if n == 0 || m.FirstEpoch == 0 {
 		abort(c, http.StatusNotFound, "no such blob")
@@ -429,7 +433,7 @@ func (a *API) putAvatar(c *gin.Context) {
 			return nil
 		}
 		res := tx.Model(&database.Blob{}).
-			Where("id = ? AND room_id = ? AND uploader = ? AND message_id IS NULL", req.Blob, st.Room, me).
+			Where("id = ? AND room_id = ? AND uploader = ? AND message_id IS NULL AND picture = 0", req.Blob, st.Room, me).
 			Update("avatar", true)
 		if res.Error != nil {
 			return res.Error

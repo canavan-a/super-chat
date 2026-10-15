@@ -132,7 +132,7 @@ stores and serves the bytes unchanged.
 |----------|------------------------------|-------------------------------------------------------|--------|
 | `create` | anyone (seq 0 only)          | `{retentionDays, x25519}`                             | author becomes admin |
 | `epoch`  | a member who is admin, or anyone while `pendingRotation` | `{epoch: n+1, recipients:[ids], commit: b64}` | new key. `recipients` must equal the current members exactly (sorted) |
-| `meta`   | admin                        | `{}` (name/color in `enc`)                            | room name and color |
+| `meta`   | admin                        | `{}` (name/color/picture in `enc`)                    | room name, color and group picture. Each field absent = unchanged; `name: ""` clears the name |
 | `profile`| member, about themselves     | `{}` (displayName, avatar in `enc`)                   | display name, picture |
 | `settings`| admin                       | `{retentionDays}` (0 = keep forever, max 3650)        | |
 | `invite` | admin                        | `{id, key: b64 ed25519 pub, expiresAt, maxUses}` (0 = unlimited) | creates the invite |
@@ -218,6 +218,15 @@ picture but never sees it. A new picture is always a new blob, so clients
 cache by blob id and refetch only when the profile points somewhere new. `at`
 is when it was set; a device only replaces a picture newer than its own.
 
+**Group picture**: the same, for the room. An admin uploads the sealed
+picture and `PUT /v1/rooms/:id/picture {"blob": id}` marks it as the room's
+(`""` clears it; at most one per room, the previous one is deleted). It's
+readable by every member and kept by the sweeper. The key travels in a `meta`
+event, `enc.picture = {blob, key, at}` (`null` = removed), and in epoch
+snapshots so later joiners see it. Clients show it for chats with more than
+one other member; a chat of exactly two members shows the other person's name
+and profile picture instead of the room's.
+
 Members only ever see messages and envelopes from epochs at or after their
 first one.
 
@@ -236,6 +245,49 @@ message in the room up to it.
 - `{"type":"deleted","room","ids":[…]}`
 - `{"type":"typing","room","member"}`
 - `{"type":"removed","room"}` (you are no longer a member)
+- `{"type":"rtc","room","from","to"?,"box"}` (voice signaling, below; `to` is set when it was sent to you alone)
 
-The only client → server message is `{"type":"typing","room"}`, which goes to
-the room's other members and is never stored.
+A client sends only `{"type":"typing","room"}` and
+`{"type":"rtc","room","to"?,"box"}`. Both go to the room's other members (or,
+for `rtc` with `to`, to every socket of that one member) and are never stored.
+The server stamps `from` itself, from the socket's subscription.
+
+## Voice rooms
+
+Every room has a voice room: up to 8 people talking over a WebRTC mesh. The
+server knows nothing about it beyond relaying `rtc` boxes; who is in voice
+lives only on clients.
+
+```
+inner  = JSON {"v":1,"sid","to_sid"?,"k", ...fields, "ts"}
+sig    = Ed25519(sender, "sc-rtc|" ‖ room ‖ "|" ‖ to ‖ "|" ‖ inner)
+box    = epoch ‖ "." ‖ b64(aead(K_epoch, JSON{"c": b64(inner), "s": b64(sig)}, "sc-rtc|" ‖ room ‖ "|" ‖ epoch ‖ "|" ‖ from ‖ "|" ‖ to))
+```
+
+`to` is the recipient's member ID, or empty for a broadcast. `box` is at most
+16 KB, and a socket may send 600 per minute per room. A receiver drops a box
+whose signature fails, whose `ts` is more than 60 s from its clock, or whose
+`to_sid` isn't its own. Sealing the SDP is what keeps the server from
+swapping DTLS fingerprints and sitting in the middle of the media.
+
+`sid` is random per voice session, so one member on two devices is two
+sessions. Kinds (`k`):
+
+- `probe` (broadcast): sent after subscribing; everyone in voice answers with a
+  directed `beat`.
+- `beat` `{muted, deaf}`: every 15 s while in voice (broadcast), and in answer
+  to `probe`. A session not heard from for 40 s is gone.
+- `join` (broadcast): entering voice. Each session already in it with fewer
+  than 7 peers answers `here` and sends the `offer`; one with 7 answers `full`.
+  Since everyone enforces 7 peers, a voice room never exceeds 8 even when two
+  people join at once.
+- `offer` / `answer` `{sdp}`, `ice` `{cand}` (directed, with `to_sid`).
+  Whoever sent the original offer also does ICE restarts.
+- `leave` (broadcast).
+
+**ICE servers**: `GET /v1/rooms/:id/turn` (signed, members only) →
+`{urls, username?, credential?, ttl?}`. With a coturn shared secret
+configured, `username = "<unix expiry>:<random>"` and
+`credential = base64(HMAC-SHA1(secret, username))` (standard base64, padded).
+Clients merge these with STUN/TURN servers the user configured on the device,
+which are never sent anywhere.

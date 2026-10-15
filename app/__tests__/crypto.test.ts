@@ -107,6 +107,27 @@ describe('room log', () => {
     expect(view.members).toEqual([{id: alice.id, role: 'admin', name: 'Alice'}]);
   });
 
+  it('sets, keeps and removes the group picture, and clears the name', () => {
+    const {alice, created, r} = setupRoom();
+    const key = openEnvelope(alice, created.room, 1, created.batch.envelopes![alice.id], r.commits[1]);
+    const meta = (enc: Record<string, unknown>) => {
+      const {signed, state} = buildEvents(alice, r.state, [{kind: 'meta', enc, encEpoch: 1, encKey: key}]);
+      r.state = state;
+      for (const se of signed) r.events.push(parseEvent(se));
+    };
+    const pic = {blob: 'b1', key: 'k1', at: 5};
+    meta({picture: pic});
+    expect(roomView(r, {1: key}).picture).toEqual(pic);
+    expect(roomView(r, {1: key}).name).toBe('Den');
+    // A name/color change without a picture leaves it alone.
+    meta({name: 'Den 2', color: '#34C759'});
+    expect(roomView(r, {1: key}).picture).toEqual(pic);
+    meta({picture: null});
+    expect(roomView(r, {1: key}).picture).toBeNull();
+    meta({name: '', color: '#34C759'});
+    expect(roomView(r, {1: key}).name).toBeNull();
+  });
+
   it('rejects a tampered event', () => {
     const {created} = setupRoom();
     const evs = created.batch.events.slice();

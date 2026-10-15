@@ -7,8 +7,8 @@ jest.useFakeTimers();
 
 it('renders the room list with rooms (pixel field, pull, rows)', () => {
   const rooms = [
-    {key: 'a', server: 's', id: '1', name: 'Alpha', color: '#4C8BF5', unread: true, unreadCount: 3, preview: 'Bob: hi', lastAt: Date.now()},
-    {key: 'b', server: 's', id: '2', name: 'Beta', color: '#34C759', unread: false, unreadCount: 0, preview: null, lastAt: 0},
+    {key: 'a', server: 's', id: '1', name: 'Alpha', color: '#4C8BF5', picture: null, unread: true, unreadCount: 3, preview: 'Bob: hi', lastAt: Date.now()},
+    {key: 'b', server: 's', id: '2', name: 'Beta', color: '#34C759', picture: null, unread: false, unreadCount: 0, preview: null, lastAt: 0},
   ];
   let tree!: renderer.ReactTestRenderer;
   act(() => {

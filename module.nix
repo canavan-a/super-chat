@@ -77,6 +77,35 @@ in
       '';
     };
 
+    turn = {
+      urls = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "stun:turn.example.com:3478" "turn:turn.example.com:3478?transport=udp" "turns:turn.example.com:443?transport=tcp" ];
+        description = ''
+          STUN/TURN URLs offered to voice clients. Run coturn on a host with
+          a public IP (not behind the tunnel): TURN needs real client
+          addresses and its own UDP ports.
+        '';
+      };
+      secretFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          File holding coturn's static-auth-secret (use-auth-secret). When
+          set, members get TURN credentials that expire after `turn.ttl`.
+          Passed via LoadCredential, so it stays out of the Nix store: give
+          a runtime path as a string (e.g. "/run/secrets/turn"), not a Nix
+          path literal, which would be copied into the store.
+        '';
+      };
+      ttl = lib.mkOption {
+        type = lib.types.str;
+        default = "12h";
+        description = "How long minted TURN credentials last (Go duration).";
+      };
+    };
+
     web = {
       enable = lib.mkEnableOption "serving the app's web client on its own port";
       listenAddr = lib.mkOption {
@@ -154,6 +183,10 @@ in
         SUPERCHAT_ANDROID_CERT_SHA256 = lib.concatStringsSep "," cfg.androidCertSha256;
         SUPERCHAT_MAX_BLOB_MB = toString cfg.maxBlobMB;
         SUPERCHAT_TRUST_PROXY = if cfg.trustProxy then "1" else "0";
+        SUPERCHAT_TURN_URLS = lib.concatStringsSep "," cfg.turn.urls;
+        SUPERCHAT_TURN_TTL = cfg.turn.ttl;
+      } // lib.optionalAttrs (cfg.turn.secretFile != null) {
+        SUPERCHAT_TURN_SECRET_FILE = "%d/turn-secret";
       } // lib.optionalAttrs cfg.web.enable {
         SUPERCHAT_STATIC_DIR = webDir;
         SUPERCHAT_STATIC_LISTEN_ADDR = cfg.web.listenAddr;
@@ -179,6 +212,8 @@ in
         RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
         CapabilityBoundingSet = "";
         UMask = "0077";
+      } // lib.optionalAttrs (cfg.turn.secretFile != null) {
+        LoadCredential = [ "turn-secret:${cfg.turn.secretFile}" ];
       };
     };
   };

@@ -1,5 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+import {DEFAULT_ICE_SERVERS, type IceServerEntry} from './call/iceConfig';
+
 // Everyone's default server. Anyone can run their own and add it in
 // Settings → Servers; rooms remember which server they live on.
 export const DEFAULT_SERVER = 'https://chat.superbadger.io';
@@ -46,6 +48,14 @@ export interface Settings {
   lastRoom: string | null;
   // What double-tapping a message reacts with (one of QUICK_REACTIONS).
   doubleTapReaction: string;
+  // Voice: STUN/TURN servers this device uses (Settings → Voice). Kept on
+  // this device only: never synced in the vault or sent to anyone. TURN
+  // passwords only grant relay use; voice media is encrypted end to end.
+  iceServers: IceServerEntry[];
+  // Also use the chat server's relay (GET /v1/rooms/:id/turn) when it has one.
+  useServerRelay: boolean;
+  // Send all voice through a TURN relay, so peers never see this device's IP.
+  relayOnlyVoice: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -63,6 +73,9 @@ const DEFAULT_SETTINGS: Settings = {
   splashStrikes: 0,
   splashAutoDisabled: false,
   lastRoom: null,
+  iceServers: DEFAULT_ICE_SERVERS,
+  useServerRelay: true,
+  relayOnlyVoice: false,
 };
 
 type Listener = (settings: Settings) => void;

@@ -8,4 +8,5 @@ export type Route =
   | {name: 'roomSettings'; key: string}
   | {name: 'newRoom'}
   | {name: 'join'; link?: string}
-  | {name: 'settings'};
+  | {name: 'settings'}
+  | {name: 'voice'; key: string};

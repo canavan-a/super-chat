@@ -21,3 +21,9 @@ jest.mock('react-native-keychain', () => ({
 jest.mock('react-native-fs', () => ({}));
 jest.mock('react-native-document-picker', () => ({pick: jest.fn(), isCancel: () => true, types: {}}));
 jest.mock('react-native-image-picker', () => ({launchImageLibrary: jest.fn()}));
+// Voice: tests inject fake peer connections into src/call/engine.ts.
+jest.mock('react-native-webrtc', () => ({RTCPeerConnection: jest.fn(), mediaDevices: {getUserMedia: jest.fn()}}));
+jest.mock('react-native-incall-manager', () => ({
+  start: jest.fn(), stop: jest.fn(), setKeepScreenOn: jest.fn(), setForceSpeakerphoneOn: jest.fn(),
+  chooseAudioRoute: jest.fn(async () => null),
+}));

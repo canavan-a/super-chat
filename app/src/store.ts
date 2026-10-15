@@ -30,6 +30,7 @@ import {
   encryptBlob,
   encryptMessage,
   FileRef,
+  fingerprint,
   hkdf,
   Identity,
   InviteLink,
@@ -41,6 +42,9 @@ import {
   NewEvent,
   openEnvelope,
   openPreview,
+  openSignal,
+  OpenedSignal,
+  randomBytes,
   openVault,
   parseEvent,
   replay,
@@ -49,6 +53,9 @@ import {
   RoomView,
   sealVault,
   ServerMessage,
+  sealSignal,
+  Signal,
+  signalEpoch,
   sign,
   sortedMembers,
   unb64,
@@ -110,6 +117,8 @@ export interface Room {
   /** sender → id of the newest message they've read */
   receipts: Record<string, string>;
   typing: Record<string, number>;
+  /** Who is in this room's voice room, by `member:sid` (not us; see call/engine.ts). */
+  voice: Record<string, VoicePresence>;
   hasMore: boolean;
   loaded: boolean;
   /** The wipe (its time) this device last handled; see dropWiped. */
@@ -150,6 +159,7 @@ const LIST_CACHE_AD = utf8('sc-list-cache');
 interface CachedRow {
   name: string;
   color: string;
+  picture?: AvatarRef | null;
   preview: string | null;
   lastAt: number;
   unreadCount: number;
@@ -174,7 +184,7 @@ function saveListCacheSoon() {
     if (!session.get()) return;
     const rows: Record<string, CachedRow> = {};
     for (const item of roomList()) {
-      rows[item.key] = {name: item.name, color: item.color, preview: item.preview, lastAt: item.lastAt, unreadCount: item.unreadCount};
+      rows[item.key] = {name: item.name, color: item.color, picture: item.picture, preview: item.preview, lastAt: item.lastAt, unreadCount: item.unreadCount};
     }
     listCache = rows;
     const sealed = b64(aeadSeal(listCacheKey(), utf8(JSON.stringify(rows)), LIST_CACHE_AD));
@@ -206,6 +216,8 @@ export interface RoomListItem {
   id: string;
   name: string;
   color: string;
+  /** The other person's picture in a one-to-one chat, else the group picture. */
+  picture: AvatarRef | null;
   unread: boolean;
   /** Unread messages from others, as far as this device has loaded them. */
   unreadCount: number;
@@ -224,8 +236,9 @@ export function roomList(): RoomListItem[] {
         key: r.key,
         server: r.server,
         id: r.id,
-        name: r.view?.name ?? cached?.name ?? 'Encrypted room',
+        name: chatTitle(r) ?? cached?.name ?? 'Encrypted chat',
         color: r.view?.color ?? cached?.color ?? FALLBACK_ROOM_COLOR,
+        picture: r.view ? chatPicture(r) : (cached?.picture ?? null),
         unread: r.lastPos > 0 ? r.lastPos > (lastRead[r.key] ?? 0) : (cached?.unreadCount ?? 0) > 0,
         unreadCount: r.loaded || r.messages.length ? unreadCount : (cached?.unreadCount ?? 0),
         preview: previewLine(r) ?? cached?.preview ?? null,
@@ -260,6 +273,7 @@ function blankRoom(server: string, id: string): Room {
     reactions: {},
     receipts: {},
     typing: {},
+    voice: {},
     hasMore: true,
     loaded: false,
     loading: false,
@@ -469,7 +483,9 @@ async function loadRooms(): Promise<void> {
             emit();
             // Not on the way to showing the list: rotation, the picture, and
             // the newest messages for the preview carry on behind it.
-            maybeRotate(r).catch(() => {});
+            maybeRotate(r)
+              .then(() => ensureProfileCurrent(r))
+              .catch(() => {});
             syncAvatar(r).catch(() => {});
             prefetchLatest(r)
               .then(emit)
@@ -740,8 +756,16 @@ function open(server: string, c: Conn) {
       c.ready = true;
       c.backoff = 1000;
       serverStatus.set(server, true);
-      // Catch up on anything missed while disconnected.
+      // Catch up on anything missed while disconnected (resync also asks
+      // who's in voice). A room subscribed to later (just made or joined)
+      // asks on its own.
       if (first) resync(server).catch(() => {});
+      else {
+        for (const id of (msg.rooms ?? []) as string[]) {
+          const r = rooms.get(roomKey(server, id));
+          if (r) probeVoice(r);
+        }
+      }
       return;
     }
     handlePush(server, msg).catch(() => {});
@@ -778,6 +802,153 @@ async function resync(server: string) {
     }
   }
   emit();
+  // Ask who's in voice now, rather than waiting for the next heartbeats.
+  for (const r of [...rooms.values()].filter(x => x.server === server)) probeVoice(r);
+  serverReadyListeners.forEach(l => l(server));
+}
+
+// ---- voice signaling ----
+//
+// Voice rooms (src/call/engine.ts, docs/protocol.md "Voice rooms") signal
+// over the same socket. The store opens and checks each box and keeps who is
+// in each room's voice (Room.voice) for the room list and room screen; the
+// engine handles everything else.
+
+export interface VoicePresence {
+  member: string;
+  sid: string;
+  muted: boolean;
+  deaf: boolean;
+  /** ms; gone if not heard from by then. */
+  expires: number;
+}
+
+/** A session not heard from in this long has left. */
+export const VOICE_PRESENCE_MS = 40_000;
+
+/** Identifies this app instance in probes (a voice session has its own sid). */
+const deviceSid = b64(randomBytes(9));
+
+type RtcListener = (room: Room, from: string, s: OpenedSignal) => void;
+const rtcListeners = new Set<RtcListener>();
+export function onRtc(l: RtcListener): () => void {
+  rtcListeners.add(l);
+  return () => rtcListeners.delete(l);
+}
+
+type VoiceStartListener = (room: Room, member: string) => void;
+const voiceStartListeners = new Set<VoiceStartListener>();
+/** Someone opened a room's voice that was empty (for notifications). */
+export function onVoiceStart(l: VoiceStartListener): () => void {
+  voiceStartListeners.add(l);
+  return () => voiceStartListeners.delete(l);
+}
+
+type ServerReadyListener = (server: string) => void;
+const serverReadyListeners = new Set<ServerReadyListener>();
+/** A server's socket is (re)subscribed and its rooms resynced. */
+export function onServerReady(l: ServerReadyListener): () => void {
+  serverReadyListeners.add(l);
+  return () => serverReadyListeners.delete(l);
+}
+
+/**
+ * Seals a signal under the room's current epoch key and sends it. False if
+ * the room's socket is down. If that epoch's key hasn't been fetched yet (a
+ * rotation we haven't caught up on), it's fetched first and the signal goes
+ * out after.
+ */
+export function sendRtc(key: string, to: string, s: Signal): boolean {
+  const r = rooms.get(key);
+  const c = r && conns.get(r.server);
+  const epoch = r?.log?.state.epoch;
+  if (!r || !c?.ready || !c.ws || epoch === undefined) return false;
+  const ts = Date.now();
+  const go = () => {
+    const k = r.keys[epoch];
+    if (!k || !c.ready || !c.ws) return;
+    try {
+      c.ws.send(JSON.stringify({type: 'rtc', room: r.id, ...(to ? {to} : {}), box: sealSignal(r.me, r.id, epoch, k, to, s, ts)}));
+    } catch {
+      // socket closing; the engine re-sends what matters on reconnect
+    }
+  };
+  if (r.keys[epoch]) go();
+  else loadKeys(r).then(go, () => {});
+  return true;
+}
+
+/** Who is in a room's voice right now, other than this device's own session. */
+export function voicePresence(key: string): VoicePresence[] {
+  const r = rooms.get(key);
+  if (!r) return [];
+  const now = Date.now();
+  return Object.values(r.voice).filter(p => p.expires > now);
+}
+
+/** The chat server's own STUN/TURN offer for this room, or null. */
+export async function serverTurn(key: string) {
+  const r = rooms.get(key);
+  if (!r) return null;
+  return api.turn(r.server, r.id, r.me);
+}
+
+function probeVoice(r: Room) {
+  sendRtc(r.key, '', {sid: deviceSid, k: 'probe'});
+}
+
+let voiceTimer: ReturnType<typeof setTimeout> | null = null;
+/** Re-renders once the next presence entry expires. */
+function scheduleVoiceExpiry() {
+  if (voiceTimer) clearTimeout(voiceTimer);
+  voiceTimer = null;
+  let next = Infinity;
+  const now = Date.now();
+  for (const r of rooms.values()) {
+    for (const [k, p] of Object.entries(r.voice)) {
+      if (p.expires <= now) delete r.voice[k];
+      else next = Math.min(next, p.expires);
+    }
+  }
+  if (next < Infinity) {
+    voiceTimer = setTimeout(() => {
+      scheduleVoiceExpiry();
+      emit();
+    }, next - now + 50);
+  }
+}
+
+async function handleRtc(r: Room, msg: any) {
+  if (typeof msg.from !== 'string' || typeof msg.box !== 'string' || msg.from === r.me.id) return;
+  const to = typeof msg.to === 'string' ? msg.to : '';
+  if (to && to !== r.me.id) return;
+  let s: OpenedSignal;
+  try {
+    const epoch = signalEpoch(msg.box);
+    if (!r.keys[epoch]) await loadKeys(r);
+    const key = r.keys[epoch];
+    if (!key) return;
+    s = openSignal(r.id, msg.from, to, msg.box, key);
+  } catch {
+    return; // forged, stale, or from an epoch we can't read
+  }
+  const id = `${msg.from}:${s.sid}`;
+  const wasEmpty = voicePresence(r.key).length === 0;
+  if (s.k === 'beat' || s.k === 'join' || s.k === 'here') {
+    r.voice = {
+      ...r.voice,
+      [id]: {member: msg.from, sid: s.sid, muted: !!s.muted, deaf: !!s.deaf, expires: Date.now() + VOICE_PRESENCE_MS},
+    };
+    scheduleVoiceExpiry();
+    emit();
+    if (s.k === 'join' && wasEmpty) voiceStartListeners.forEach(l => l(r, msg.from));
+  } else if (s.k === 'leave' && r.voice[id]) {
+    const rest = {...r.voice};
+    delete rest[id];
+    r.voice = rest;
+    emit();
+  }
+  rtcListeners.forEach(l => l(r, msg.from, s));
 }
 
 export function sendTyping(key: string) {
@@ -847,6 +1018,10 @@ async function handlePush(server: string, msg: any) {
       emit();
       return;
     }
+    case 'rtc': {
+      await handleRtc(r, msg);
+      return;
+    }
   }
 }
 
@@ -858,7 +1033,7 @@ function myName(r: Room): string {
 
 function snapshot(r: Room): Record<string, any> {
   const v = r.view;
-  return {name: v?.name ?? undefined, color: v?.color ?? undefined, profiles: v?.names ?? {}};
+  return {name: v?.name ?? undefined, color: v?.color ?? undefined, picture: v?.picture ?? undefined, profiles: v?.names ?? {}};
 }
 
 /**
@@ -998,6 +1173,22 @@ async function republishProfile(r: Room) {
   await append(r, log => ({
     events: [{kind: 'profile', enc: profileEnc(r, name), encEpoch: log.state.epoch, encKey: r.keys[log.state.epoch]}],
   }));
+}
+
+/**
+ * Re-publishes my profile if the room has been re-keyed since I last did.
+ * Someone who joins can only read profiles under keys from after they
+ * joined, so each member re-publishes on a new key; that used to happen only
+ * when the app was open at the moment of the re-key, and anyone joining
+ * while it was closed saw no name for me (until I next changed my profile).
+ * Checked whenever the room loads, so a missed re-key is caught up.
+ */
+async function ensureProfileCurrent(r: Room) {
+  const s = r.log?.state;
+  if (!s || !(r.me.id in s.members)) return;
+  let mine = -1;
+  for (const e of r.log!.events) if (e.kind === 'profile' && e.author === r.me.id) mine = Math.max(mine, e.epoch);
+  if (mine < s.epoch) await republishProfile(r);
 }
 
 function addRoom(server: string, id: string): Room {
@@ -1255,6 +1446,62 @@ export const setMeta = (key: string, name: string, color: string) =>
   append(rooms.get(key)!, log => ({
     events: [{kind: 'meta', enc: {name, color}, encEpoch: log.state.epoch, encKey: rooms.get(key)!.keys[log.state.epoch]}],
   }));
+
+/**
+ * Sets (or, with null, removes) the group picture. Like a profile picture:
+ * an encrypted blob the server marks as the room's, with the key in the
+ * (admin-only) meta event.
+ */
+export async function setRoomPicture(key: string, jpeg: Uint8Array | null): Promise<void> {
+  const r = rooms.get(key)!;
+  let picture: AvatarRef | null = null;
+  if (jpeg) {
+    const {key: fk, sealed} = encryptBlob(jpeg);
+    const blob = await uploadBlob(r.server, r.id, r.me, sealed);
+    await api.setPicture(r.server, r.id, r.me, blob);
+    putSealed(blob, sealed);
+    remember(blob, jpeg);
+    picture = {blob, key: b64(fk), at: Date.now()};
+  } else {
+    await api.setPicture(r.server, r.id, r.me, '');
+  }
+  // Only the picture: an absent name or color means "unchanged".
+  await append(r, log => ({
+    events: [{kind: 'meta', enc: {picture}, encEpoch: log.state.epoch, encKey: r.keys[log.state.epoch]}],
+  }));
+}
+
+/**
+ * The other person, when this is a one-to-one chat: exactly two members, me
+ * and them. Such a chat shows as that person (name and picture) rather than
+ * by its room name.
+ */
+export function dmPeer(r: Room | undefined): string | null {
+  const m = r?.view?.members;
+  if (!r || !m || m.length !== 2 || !m.some(x => x.id === r.me.id)) return null;
+  return m.find(x => x.id !== r.me.id)!.id;
+}
+
+/**
+ * What a chat is called: the other person in a one-to-one chat, else its
+ * name, else (no name set, or it was cleared) who's in it.
+ */
+export function chatTitle(r: Room | undefined): string | null {
+  const v = r?.view;
+  if (!r || !v) return null;
+  const peer = dmPeer(r);
+  if (peer) return v.names[peer] ?? fingerprint(peer);
+  if (v.name) return v.name;
+  const others = v.members.filter(m => m.id !== r.me.id).map(m => m.name ?? fingerprint(m.id));
+  return others.length ? others.join(', ') : 'New chat';
+}
+
+/** The picture a chat shows: the other person's in a one-to-one chat, else the group's. */
+export function chatPicture(r: Room | undefined): AvatarRef | null {
+  const peer = dmPeer(r);
+  if (peer) return r!.view!.avatars[peer] ?? null;
+  return r?.view?.picture ?? null;
+}
 
 export const setDisplayName = (key: string, displayName: string) =>
   append(rooms.get(key)!, log => ({

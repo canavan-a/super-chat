@@ -22,6 +22,11 @@ class NodeXHR {
   responseType = '';
   onload: (() => void) | null = null;
   onerror: (() => void) | null = null;
+  ontimeout: (() => void) | null = null;
+  timeout = 0;
+  // Upload progress (src/api.ts); never fired here.
+  upload: {onprogress?: unknown} = {};
+  onprogress: unknown = null;
   private method = 'GET';
   private url = '';
   private headers: Record<string, string> = {};
@@ -237,5 +242,53 @@ run('end to end', () => {
     expect(restored.in(key)).toBe(aliceId);
 
     for (const c of [alice, bob, carol, restored]) c.store.disconnectAll();
+  }, 60_000);
+
+  it('relays sealed voice signaling, directed and broadcast', async () => {
+    const alice = client(url);
+    const bob = client(url);
+    const carol = client(url);
+    // Listening from the start: making or joining a room opens the socket.
+    type Got = {from: string; k: string; sid: string; sdp?: string};
+    const inbox = (c: Client) => {
+      const got: Got[] = [];
+      c.store.onRtc((_room, from, s) => got.push({from, k: s.k, sid: s.sid, sdp: s.sdp}));
+      return got;
+    };
+    const toAlice = inbox(alice);
+    const toCarol = inbox(carol);
+    const toBob = inbox(bob);
+    alice.store.connect(url);
+    const key = await alice.store.createRoom(url, 'Voice', '#4C8BF5', 0, 'Alice');
+    const link = await alice.store.makeInvite(key, {expiresAt: 0, maxUses: 0});
+    bob.store.connect(url);
+    const bobKey = await bob.store.join(bob.crypto.parseInviteLink(link)!, 'Bob');
+    await until(() => alice.store.getRoom(key)!.view!.members.length === 2);
+    const bobId = bob.in(bobKey);
+    const aliceId = alice.in(key);
+    // Subscribing to a room it just joined, Bob asks who's in voice.
+    await until(() => toAlice.some(g => g.k === 'probe' && g.from === bobId));
+
+    carol.store.connect(url);
+    const carolKey = await carol.store.join(carol.crypto.parseInviteLink(link)!, 'Carol');
+    const carolId = carol.in(carolKey);
+    await until(() => [toAlice, toBob].every(box => box.some(g => g.k === 'probe' && g.from === carolId)));
+
+    // Directed: only Alice gets it, and it's from Bob.
+    await until(() => bob.store.sendRtc(bobKey, aliceId, {sid: 'b1', k: 'offer', sdp: 'v=0'}));
+    await until(() => toAlice.find(g => g.k === 'offer'));
+    expect(toAlice.find(g => g.k === 'offer')).toEqual({from: bobId, k: 'offer', sid: 'b1', sdp: 'v=0'});
+    await new Promise(r => setTimeout(r, 300));
+    expect(toCarol.some(g => g.k === 'offer')).toBe(false);
+
+    // Broadcast presence: everyone else sees Bob in voice; Bob doesn't hear himself.
+    bob.store.sendRtc(bobKey, '', {sid: 'b1', k: 'join', muted: true});
+    await until(() => alice.store.voicePresence(key).length === 1 && carol.store.voicePresence(carolKey).length === 1);
+    expect(alice.store.voicePresence(key)[0]).toMatchObject({member: bobId, sid: 'b1', muted: true});
+    expect(toBob.some(g => g.k === 'join')).toBe(false);
+    bob.store.sendRtc(bobKey, '', {sid: 'b1', k: 'leave'});
+    await until(() => alice.store.voicePresence(key).length === 0);
+
+    for (const c of [alice, bob, carol]) c.store.disconnectAll();
   }, 60_000);
 });

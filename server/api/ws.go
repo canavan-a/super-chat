@@ -84,6 +84,22 @@ func (h *Hub) SendRoom(room string, m wsMsg, except string) {
 	}
 }
 
+// SendMember delivers m to every socket subscribed to room as member (each
+// of their devices).
+func (h *Hub) SendMember(room, member string, m wsMsg) {
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c, mm := range h.rooms[room] {
+		if mm == member {
+			deliver(c, raw)
+		}
+	}
+}
+
 // Removed tells a member's sockets they're out of the room and stops
 // sending them its events.
 func (h *Hub) Removed(room, member string) {
@@ -110,6 +126,8 @@ const (
 	wsPing      = 30 * time.Second
 	wsReadLimit = 256 << 10
 	wsMaxSubs   = 1000
+	// Voice signaling (SDP, ICE candidates) is a few KB per message.
+	wsMaxRTCBox = 16 << 10
 )
 
 type wsSub struct {
@@ -119,8 +137,8 @@ type wsSub struct {
 }
 
 // ws sends a challenge, then accepts any number of room subscriptions, each
-// signed by that room's member key over the challenge. Afterwards the only
-// other thing a client sends is typing.
+// signed by that room's member key over the challenge. Afterwards a client
+// only sends typing and rtc (voice signaling), both relayed and never stored.
 func (a *API) ws(c *gin.Context) {
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -144,12 +162,16 @@ func (a *API) ws(c *gin.Context) {
 	go func() {
 		defer close(done)
 		typing := newLimiter(30, time.Minute)
+		// Trickled ICE candidates come in bursts.
+		rtc := newLimiter(600, time.Minute)
 		for {
 			_ = conn.SetReadDeadline(time.Now().Add(2 * wsPing))
 			var in struct {
 				Type string  `json:"type"`
 				Room string  `json:"room"`
 				Subs []wsSub `json:"subs"`
+				To   string  `json:"to"`
+				Box  string  `json:"box"`
 			}
 			if err := conn.ReadJSON(&in); err != nil {
 				return
@@ -173,6 +195,22 @@ func (a *API) ws(c *gin.Context) {
 				a.hub.mu.Unlock()
 				if subscribed && typing.allow(in.Room, time.Now()) {
 					a.hub.SendRoom(in.Room, wsMsg{"type": "typing", "room": in.Room, "member": member}, member)
+				}
+			case "rtc":
+				// The box is sealed and signed by the clients; the server
+				// only stamps who sent it and routes it.
+				a.hub.mu.Lock()
+				member, subscribed := wc.subs[in.Room]
+				a.hub.mu.Unlock()
+				if !subscribed || in.Box == "" || len(in.Box) > wsMaxRTCBox || !rtc.allow(in.Room, time.Now()) {
+					continue
+				}
+				out := wsMsg{"type": "rtc", "room": in.Room, "from": member, "box": in.Box}
+				if in.To == "" {
+					a.hub.SendRoom(in.Room, out, member)
+				} else {
+					out["to"] = in.To
+					a.hub.SendMember(in.Room, in.To, out)
 				}
 			}
 		}

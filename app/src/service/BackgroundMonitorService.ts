@@ -8,19 +8,28 @@
 // foreground-service task) and dynamic import() from App.tsx/SettingsScreen.
 import notifee, {AndroidForegroundServiceType} from '@notifee/react-native';
 
-import {notificationColor, notifyMessage} from '../notifications/messages';
+import {notificationColor, notifyMessage, notifyVoiceStart} from '../notifications/messages';
 import {CH_SERVICE, ensureChannels, NID_FGS, PREFER_SMALL_ICON, PRESS_ACTION} from '../notifications/channels';
 import {session} from '../session';
 import {settingsStore} from '../settings';
-import {connect, onIncoming} from '../store';
+import {connect, onIncoming, onVoiceStart} from '../store';
 
 let unsubscribe: (() => void) | null = null;
 
 function watch() {
   unsubscribe?.();
-  unsubscribe = onIncoming((room, msg) => {
+  const offMessages = onIncoming((room, msg) => {
     notifyMessage(room, msg).catch(err => console.warn('[superchat] notify failed', err));
   });
+  const offVoice = onVoiceStart((room, member) => {
+    import('../call/voice')
+      .then(({voice}) => notifyVoiceStart(room, member, voice.getView().roomKey === room.key))
+      .catch(err => console.warn('[superchat] voice notify failed', err));
+  });
+  unsubscribe = () => {
+    offMessages();
+    offVoice();
+  };
   if (session.get()) settingsStore.get().servers.forEach(connect);
 }
 

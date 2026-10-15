@@ -7,20 +7,32 @@ import {
   Copy,
   Download,
   File,
+  HeadphoneOff,
+  Headphones,
+  Info,
   Link,
   Lock,
   LucideIcon,
+  Mic,
+  MicOff,
   MoreVertical,
   Plus,
   Paperclip,
+  PhoneOff,
+  RefreshCw,
   Reply,
   Send,
   Settings,
   Shield,
+  SignalLow,
   SmilePlus,
+  Speaker,
   Trash2,
+  TriangleAlert,
   UserPlus,
   Users,
+  Volume2,
+  VolumeX,
   X,
 } from 'lucide-react-native';
 
@@ -48,7 +60,19 @@ export type IconName =
   | 'shield'
   | 'lock'
   | 'link'
-  | 'plus';
+  | 'plus'
+  | 'headphones'
+  | 'headphone-off'
+  | 'phone-off'
+  | 'mic'
+  | 'mic-off'
+  | 'volume-2'
+  | 'volume-x'
+  | 'speaker'
+  | 'info'
+  | 'warning'
+  | 'retry'
+  | 'signal-low';
 
 const ICONS: Record<IconName, LucideIcon> = {
   kebab: MoreVertical,
@@ -72,6 +96,18 @@ const ICONS: Record<IconName, LucideIcon> = {
   lock: Lock,
   link: Link,
   plus: Plus,
+  headphones: Headphones,
+  'headphone-off': HeadphoneOff,
+  'phone-off': PhoneOff,
+  mic: Mic,
+  'mic-off': MicOff,
+  'volume-2': Volume2,
+  'volume-x': VolumeX,
+  speaker: Speaker,
+  info: Info,
+  warning: TriangleAlert,
+  retry: RefreshCw,
+  'signal-low': SignalLow,
 };
 
 export function Icon({

@@ -5,3 +5,4 @@ export * from './log';
 export * from './room';
 export * from './view';
 export * from './vault';
+export * from './rtc';

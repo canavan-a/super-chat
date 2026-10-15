@@ -4,10 +4,15 @@ import {ActivityIndicator, Clipboard, Pressable, ScrollView, Share, StyleSheet, 
 import type {HeaderInfo} from '../App';
 import {fingerprint} from '../crypto';
 import {Avatar} from '../components/Avatar';
+import {AvatarCropper} from '../components/AvatarCropper';
+import {ChatAvatar} from '../components/ChatAvatar';
 import {Icon} from '../components/Icon';
+import {AvatarSource, pickAvatarSource} from '../files';
 import {platformConfirm} from '../platformConfirm';
 import {Route} from '../routes';
 import {
+  chatPicture,
+  chatTitle,
   getRoom,
   kick,
   leave,
@@ -17,6 +22,7 @@ import {
   setDisplayName,
   setMeta,
   setRetention,
+  setRoomPicture,
   setRole,
   useStore,
   wipeChat,
@@ -75,15 +81,17 @@ export function RoomSettingsScreen({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [link, setLink] = useState<string | null>(null);
+  const [cropSrc, setCropSrc] = useState<AvatarSource | null>(null);
 
   useEffect(() => {
     onHeaderChange({
-      title: view?.name ?? 'Room',
-      subtitle: 'Room settings',
+      title: chatTitle(room) ?? 'Chat',
+      subtitle: 'Chat settings',
       accentColor: view?.color ?? undefined,
+      avatar: {roomKey, picture: chatPicture(room), color: view?.color ?? theme.surfaceAlt},
       actions: [{label: 'Back to chat', icon: 'close', onPress: () => onNavigate({name: 'room', key: roomKey})}],
     });
-  }, [view?.name, view?.color, roomKey, onHeaderChange, onNavigate]);
+  }, [view, room, theme, roomKey, onHeaderChange, onNavigate]);
 
   if (!room || !view) {
     return (
@@ -105,6 +113,17 @@ export function RoomSettingsScreen({
     }
   };
 
+  // Pick, then frame it in the cropper; it's published once cropped.
+  const choosePicture = async () => {
+    setError(null);
+    try {
+      const src = await pickAvatarSource();
+      if (src) setCropSrc(src);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
   const now = Date.now();
   const inviteStatus = (iv: (typeof view.invites)[number]) =>
     iv.revoked
@@ -116,6 +135,17 @@ export function RoomSettingsScreen({
           : 'Active';
 
   return (
+    <View style={styles.container}>
+      {cropSrc && (
+        <AvatarCropper
+          src={cropSrc}
+          onCancel={() => setCropSrc(null)}
+          onDone={async jpeg => {
+            setCropSrc(null);
+            await run('picture', () => setRoomPicture(roomKey, jpeg));
+          }}
+        />
+      )}
     <ScrollView style={styles.container} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
       {error && <Text style={styles.error}>{error}</Text>}
 
@@ -262,23 +292,45 @@ export function RoomSettingsScreen({
       </Section>
 
       {isAdmin && (
-        <Section title="Room" styles={styles}>
-          <TextInput
-            style={styles.input}
-            value={name}
-            onChangeText={setName}
-            maxLength={80}
-            placeholder="Room name"
-            placeholderTextColor={theme.textMuted}
-          />
+        <Section title="Chat" styles={styles}>
+          <Text style={styles.label}>Group picture</Text>
+          <View style={styles.inline}>
+            <ChatAvatar roomKey={roomKey} picture={view.picture} color={view.color ?? theme.surfaceAlt} size={56} />
+            <Pressable style={[styles.secondary, busy === 'picture' && styles.disabled]} disabled={busy === 'picture'} onPress={choosePicture}>
+              {busy === 'picture' ? <ActivityIndicator size="small" color={theme.text} /> : <Text style={styles.secondaryText}>Choose…</Text>}
+            </Pressable>
+            {view.picture && busy !== 'picture' && (
+              <Pressable style={styles.secondary} onPress={() => run('picture', () => setRoomPicture(roomKey, null))}>
+                <Text style={styles.secondaryText}>Remove</Text>
+              </Pressable>
+            )}
+          </View>
+          <Text style={styles.help}>Shown for group chats. A one-to-one chat shows the other person instead.</Text>
+
+          <Text style={styles.label}>Name</Text>
+          <View style={styles.inline}>
+            <TextInput
+              style={[styles.input, styles.flex]}
+              value={name}
+              onChangeText={setName}
+              maxLength={80}
+              placeholder="No name: shows who's in it"
+              placeholderTextColor={theme.textMuted}
+            />
+            {name !== '' && (
+              <Pressable style={styles.secondary} onPress={() => setName('')} accessibilityLabel="Clear name">
+                <Icon name="close" size={14} color={theme.text} />
+              </Pressable>
+            )}
+          </View>
           <View style={styles.swatches}>
             {ROOM_COLORS.map(c => (
               <Pressable key={c} onPress={() => setColor(c)} style={[styles.swatch, {backgroundColor: c}, color === c && styles.swatchOn]} />
             ))}
           </View>
           <Pressable
-            style={[styles.primary, (!name.trim() || busy === 'meta') && styles.disabled]}
-            disabled={!name.trim() || busy === 'meta'}
+            style={[styles.primary, busy === 'meta' && styles.disabled]}
+            disabled={busy === 'meta'}
             onPress={() => run('meta', () => setMeta(roomKey, name.trim(), color))}>
             <Text style={styles.primaryText}>Save name and color</Text>
           </Pressable>
@@ -347,6 +399,7 @@ export function RoomSettingsScreen({
         <Text style={styles.leaveText}>Leave room</Text>
       </Pressable>
     </ScrollView>
+    </View>
   );
 }
 

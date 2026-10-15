@@ -1,12 +1,14 @@
 import React, {useMemo, useRef, useState} from 'react';
 import {FlatList, Pressable, StyleSheet, Text, View} from 'react-native';
 
+import {roomVoice, useVoice} from '../call/voice';
+import {ChatAvatar} from '../components/ChatAvatar';
 import {Icon} from '../components/Icon';
 import {Overlay} from '../components/Overlay';
 import {PixelField} from '../components/PixelField';
 import {SpringyPull} from '../components/SpringyPull';
 import {Route} from '../routes';
-import {refreshAll, RoomListItem} from '../store';
+import {refreshAll, RoomListItem, useStore} from '../store';
 import {Theme, useTheme} from '../theme';
 
 /**
@@ -28,6 +30,9 @@ export function RoomListScreen({
   const [addOpen, setAddOpen] = useState(false);
   const scrollY = useRef(0);
   const showServer = new Set(rooms.map(r => r.server)).size > 1;
+  useVoice();
+  // Rooms with someone in voice, and how many.
+  const inVoice = useStore(() => Object.fromEntries(rooms.map(r => [r.key, roomVoice(r.key).count])));
 
   const go = (route: Route) => {
     setAddOpen(false);
@@ -59,26 +64,35 @@ export function RoomListScreen({
                   pressed && styles.rowPressed,
                 ]}
                 onPress={() => onNavigate({name: 'room', key: item.key})}>
-                <View style={styles.rowTop}>
-                  <Text style={[styles.rowTitle, unread && styles.rowTitleUnread]} numberOfLines={1}>
-                    {item.name}
-                  </Text>
-                  <Text style={[styles.rowTime, unread && styles.rowTimeUnread]}>
-                    {item.lastAt ? timeAgo(item.lastAt) : ''}
-                  </Text>
-                </View>
-                <View style={styles.rowBottom}>
-                  <Text style={[styles.rowPreview, unread && styles.rowPreviewUnread]} numberOfLines={1}>
-                    {showServer ? item.server.replace(/^https?:\/\//, '') + ' · ' : ''}
-                    {item.preview ?? (unread ? 'New messages' : 'No messages yet')}
-                  </Text>
-                  {unread && (
-                    <View style={styles.badge}>
-                      <Text style={styles.badgeText}>
-                        {item.unreadCount > 0 ? (item.unreadCount > 99 ? '99+' : item.unreadCount) : ''}
-                      </Text>
-                    </View>
-                  )}
+                <ChatAvatar roomKey={item.key} picture={item.picture} color={item.color} size={44} />
+                <View style={styles.rowBody}>
+                  <View style={styles.rowTop}>
+                    <Text style={[styles.rowTitle, unread && styles.rowTitleUnread]} numberOfLines={1}>
+                      {item.name}
+                    </Text>
+                    {inVoice[item.key] ? (
+                      <View style={styles.voiceBadge} accessibilityLabel={`${inVoice[item.key]} in voice`}>
+                        <Icon name="volume-2" size={12} color={theme.success} />
+                        <Text style={styles.voiceBadgeText}>{inVoice[item.key]}</Text>
+                      </View>
+                    ) : null}
+                    <Text style={[styles.rowTime, unread && styles.rowTimeUnread]}>
+                      {item.lastAt ? timeAgo(item.lastAt) : ''}
+                    </Text>
+                  </View>
+                  <View style={styles.rowBottom}>
+                    <Text style={[styles.rowPreview, unread && styles.rowPreviewUnread]} numberOfLines={1}>
+                      {showServer ? item.server.replace(/^https?:\/\//, '') + ' · ' : ''}
+                      {item.preview ?? (unread ? 'New messages' : 'No messages yet')}
+                    </Text>
+                    {unread && (
+                      <View style={styles.badge}>
+                        <Text style={styles.badgeText}>
+                          {item.unreadCount > 0 ? (item.unreadCount > 99 ? '99+' : item.unreadCount) : ''}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
                 </View>
               </Pressable>
             );
@@ -96,8 +110,8 @@ export function RoomListScreen({
               </View>
             ) : (
               <View style={styles.center}>
-                <Text style={styles.emptyTitle}>No rooms yet</Text>
-                <Text style={styles.muted}>Rooms are invite-only. Tap + to start one, or join with an invite link.</Text>
+                <Text style={styles.emptyTitle}>No chats yet</Text>
+                <Text style={styles.muted}>Chats are invite-only. Tap + to start one, or join with an invite link.</Text>
               </View>
             )
           }
@@ -108,7 +122,7 @@ export function RoomListScreen({
         style={({pressed}) => [styles.fab, pressed && styles.fabPressed]}
         onPress={() => setAddOpen(true)}
         accessibilityRole="button"
-        accessibilityLabel="New room or join">
+        accessibilityLabel="New chat or join">
         <Icon name="plus" size={26} color={theme.primaryText} />
       </Pressable>
 
@@ -116,7 +130,7 @@ export function RoomListScreen({
         <View style={styles.sheet}>
           <Pressable style={styles.sheetRow} onPress={() => go({name: 'newRoom'})}>
             <Icon name="plus" size={18} color={theme.text} />
-            <Text style={styles.sheetText}>New room</Text>
+            <Text style={styles.sheetText}>New chat</Text>
           </Pressable>
           <Pressable style={styles.sheetRow} onPress={() => go({name: 'join'})}>
             <Icon name="link" size={18} color={theme.text} />
@@ -138,6 +152,8 @@ export function timeAgo(ts: number): string {
 
 function makeStyles(theme: Theme) {
   return StyleSheet.create({
+    voiceBadge: {flexDirection: 'row', alignItems: 'center', gap: 3, marginRight: 8},
+    voiceBadgeText: {fontSize: 11, fontWeight: '700', color: theme.success},
     container: {flex: 1, backgroundColor: theme.bg},
     center: {flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 32},
     skeletonRow: {paddingHorizontal: 16, paddingVertical: 16, gap: 8, borderBottomWidth: 1, borderBottomColor: theme.border},
@@ -150,12 +166,16 @@ function makeStyles(theme: Theme) {
     listContent: {paddingBottom: 96},
     row: {
       paddingHorizontal: 16,
-      paddingVertical: 14,
+      paddingVertical: 12,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
       borderBottomWidth: 1,
       borderBottomColor: theme.border,
       // Room color accent, the same treatment super-badger gives stations.
       borderLeftWidth: 4,
     },
+    rowBody: {flex: 1, minWidth: 0},
     rowUnread: {backgroundColor: theme.surface},
     rowPressed: {backgroundColor: theme.surfaceAlt},
     rowTop: {flexDirection: 'row', alignItems: 'baseline', gap: 8},

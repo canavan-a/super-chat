@@ -17,17 +17,22 @@ import {
 import type {HeaderInfo} from '../App';
 import {FileRef, fingerprint} from '../crypto';
 import {pickFiles, pickImages, PickedFile, saveFileAs} from '../files';
+import {openVoice} from '../call/actions';
 import {Avatar} from '../components/Avatar';
 import {PixelField} from '../components/PixelField';
 import {Icon} from '../components/Icon';
+import {ImageViewer} from '../components/ImageViewer';
 import {Overlay} from '../components/Overlay';
 import {MarkdownText} from '../components/Markdown';
 import {TypingDots} from '../components/TypingDots';
+import {VoiceStrip} from '../components/VoiceStrip';
 import {tick} from '../haptics';
 import {platformConfirm} from '../platformConfirm';
 import {QUICK_REACTIONS, settingsStore} from '../settings';
 import {Route} from '../routes';
 import {
+  chatPicture,
+  chatTitle,
   ChatMessage,
   deleteMessage,
   fetchFile,
@@ -86,15 +91,17 @@ export function RoomScreen({
   useEffect(() => {
     if (!view) return;
     onHeaderChange({
-      title: view.name ?? 'Encrypted room',
+      title: chatTitle(room) ?? 'Encrypted chat',
       accentColor: view.color ?? undefined,
+      avatar: {roomKey, picture: chatPicture(room), color: view.color ?? theme.surfaceAlt},
       subtitle: `${view.members.length} member${view.members.length === 1 ? '' : 's'} · end-to-end encrypted${
         view.retentionDays ? ` · ${view.retentionDays}d` : ''
       }`,
       // Tapping the header opens the room's controls (members, invites, settings).
       onPress: () => onNavigate({name: 'roomSettings', key: roomKey}),
+      actions: [{label: 'Voice', icon: 'headphones', onPress: () => openVoice(roomKey, onNavigate)}],
     });
-  }, [view, roomKey, onHeaderChange, onNavigate]);
+  }, [view, room, theme, roomKey, onHeaderChange, onNavigate]);
 
   // Read receipts: the newest message counts as read while this room is on
   // screen and the app is in the foreground.
@@ -177,6 +184,7 @@ export function RoomScreen({
 
   return (
     <View style={styles.container}>
+      <VoiceStrip roomKey={roomKey} onNavigate={onNavigate} />
       {(room.error || error) && (
         <View style={styles.errorRow}>
           <Text style={styles.errorText}>{error ?? room.error}</Text>
@@ -548,26 +556,32 @@ function ChatList({
         </View>
       </Overlay>
 
-      <Overlay visible={viewer !== null} onClose={() => setViewer(null)} backdrop="rgba(0,0,0,0.92)" style={styles.viewerBackdrop}>
-        <View style={styles.viewerInner} pointerEvents="box-none">
-          {viewer && <Image source={{uri: viewer.uri}} style={styles.viewerImage} resizeMode="contain" />}
-          <View style={styles.viewerActions}>
-            <Pressable style={styles.viewerButton} onPress={saveViewed} disabled={viewerSave === 'saving'}>
-              {viewerSave === 'saving' ? <ActivityIndicator size="small" color="#fff" /> : <Icon name="download" size={18} color="#fff" />}
-              <Text style={styles.viewerButtonText}>
-                {viewerSave === 'saving' ? 'Saving…' : viewerSave === 'saved' ? 'Saved' : 'Save'}
-              </Text>
-            </Pressable>
-            <Pressable style={styles.viewerButton} onPress={() => setViewer(null)}>
-              <Icon name="close" size={18} color="#fff" />
-              <Text style={styles.viewerButtonText}>Close</Text>
-            </Pressable>
-          </View>
-          {viewerSave && typeof viewerSave === 'object' && (
-            <Text style={styles.viewerError}>Couldn't save: {viewerSave.error}</Text>
-          )}
-        </View>
-      </Overlay>
+      {viewer && (
+        <ImageViewer
+          key={viewer.uri}
+          uri={viewer.uri}
+          onClose={() => setViewer(null)}
+          footer={
+            <>
+              <View style={styles.viewerActions}>
+                <Pressable style={styles.viewerButton} onPress={saveViewed} disabled={viewerSave === 'saving'}>
+                  {viewerSave === 'saving' ? <ActivityIndicator size="small" color="#fff" /> : <Icon name="download" size={18} color="#fff" />}
+                  <Text style={styles.viewerButtonText}>
+                    {viewerSave === 'saving' ? 'Saving…' : viewerSave === 'saved' ? 'Saved' : 'Save'}
+                  </Text>
+                </Pressable>
+                <Pressable style={styles.viewerButton} onPress={() => setViewer(null)}>
+                  <Icon name="close" size={18} color="#fff" />
+                  <Text style={styles.viewerButtonText}>Close</Text>
+                </Pressable>
+              </View>
+              {viewerSave && typeof viewerSave === 'object' && (
+                <Text style={styles.viewerError}>Couldn't save: {viewerSave.error}</Text>
+              )}
+            </>
+          }
+        />
+      )}
     </View>
   );
 }
@@ -1031,9 +1045,6 @@ function makeStyles(theme: Theme) {
     reactRow: {flexDirection: 'row', justifyContent: 'space-around', paddingVertical: 10},
     reactPick: {padding: 6},
     reactPickText: {fontSize: 24},
-    viewerBackdrop: {},
-    viewerInner: {flex: 1, justifyContent: 'center'},
-    viewerImage: {flex: 1, width: '100%'},
     viewerActions: {flexDirection: 'row', justifyContent: 'center', gap: 24, padding: 20},
     viewerButton: {flexDirection: 'row', alignItems: 'center', gap: 6, padding: 10},
     viewerButtonText: {color: '#fff', fontWeight: '700'},

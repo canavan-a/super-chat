@@ -18,10 +18,14 @@ import {
 } from 'react-native';
 
 import {useThemedAppIcon} from './appIcon';
+import {handleVoiceAction} from './call/voiceService';
+import {RemoteAudio} from './call/RemoteAudio';
+import './call/voice';
+import {ChatAvatar} from './components/ChatAvatar';
 import {CrashScreen} from './components/CrashScreen';
 import {PixelField} from './components/PixelField';
 import {Icon, IconName} from './components/Icon';
-import {parseInviteLink} from './crypto';
+import {AvatarRef, parseInviteLink} from './crypto';
 import {hasStoredIdentity, NEEDS_PASSPHRASE} from './keystore';
 import {LogoLine} from './logo/LogoArt';
 import {SplashGate} from './logo/SplashGate';
@@ -35,6 +39,8 @@ import {OnboardingScreen} from './screens/OnboardingScreen';
 import {RoomScreen} from './screens/RoomScreen';
 import {RoomSettingsScreen} from './screens/RoomSettingsScreen';
 import {SettingsScreen} from './screens/SettingsScreen';
+import {VoiceScreen} from './screens/VoiceScreen';
+import {VoiceBar} from './components/VoiceBar';
 import {session} from './session';
 import {settingsStore} from './settings';
 import {getRoom, isServerOnline, refreshRooms, resetStore, roomList, roomsReady, useStore} from './store';
@@ -44,9 +50,10 @@ const TITLES: Record<Route['name'], string> = {
   home: 'Super Chat',
   room: 'Room',
   roomSettings: 'Room settings',
-  newRoom: 'New Room',
+  newRoom: 'New chat',
   join: 'Join a room',
   settings: 'Settings',
+  voice: 'Voice',
 };
 
 // Screens report their own title/subtitle/actions up here so they render in
@@ -57,6 +64,8 @@ export interface HeaderInfo {
   // matching the drawer row's left border.
   accentColor?: string;
   subtitle?: string;
+  /** The chat's picture (or color disc), shown beside the title. */
+  avatar?: {roomKey: string; picture: AvatarRef | null; color: string};
   actions?: {label: string; onPress: () => void; destructive?: boolean; icon?: IconName}[];
   /** Tapping the title area (a room's header opens its controls). */
   onPress?: () => void;
@@ -154,19 +163,19 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
   const [headerInfo, setHeaderInfo] = useState<HeaderInfo | null>(null);
 
   const navigate = useCallback((next: Route) => {
-    if (next.name !== 'room' && next.name !== 'roomSettings') setHeaderInfo(null);
+    if (next.name !== 'room' && next.name !== 'roomSettings' && next.name !== 'voice') setHeaderInfo(null);
     if (next.name === 'room') settingsStore.update({lastRoom: next.key});
     setRoute(next);
   }, []);
 
   const goBack = useCallback(() => {
-    if (route.name === 'roomSettings') navigate({name: 'room', key: route.key});
+    if (route.name === 'roomSettings' || route.name === 'voice') navigate({name: 'room', key: route.key});
     else navigate({name: 'home'});
   }, [route, navigate]);
 
   // If the open room disappears (kicked, left elsewhere), go home.
   useEffect(() => {
-    if ((route.name === 'room' || route.name === 'roomSettings') && ready && !getRoom(route.key)) {
+    if ((route.name === 'room' || route.name === 'roomSettings' || route.name === 'voice') && ready && !getRoom(route.key)) {
       navigate({name: 'home'});
     }
   }, [rooms, route, ready, navigate]);
@@ -219,6 +228,7 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
     import('@notifee/react-native').then(({default: notifee, EventType}) => {
       notifee.getInitialNotification().then(initial => open(navTarget(initial?.notification.data)));
       unsubscribeForeground = notifee.onForegroundEvent(({type, detail}) => {
+        if (type === EventType.ACTION_PRESS && handleVoiceAction(detail.pressAction?.id)) return;
         if (type === EventType.PRESS) open(navTarget(detail.notification?.data));
       });
     });
@@ -348,8 +358,8 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
     [inRoom, canSwipe, currentIndex, rooms, screenWidth],
   );
 
-  const showingRoomHeader = (route.name === 'room' || route.name === 'roomSettings') && headerInfo;
-  const activeKey = route.name === 'room' || route.name === 'roomSettings' ? route.key : null;
+  const showingRoomHeader = (route.name === 'room' || route.name === 'roomSettings' || route.name === 'voice') && headerInfo;
+  const activeKey = route.name === 'room' || route.name === 'roomSettings' || route.name === 'voice' ? route.key : null;
   const offline = activeKey ? !isServerOnline(getRoom(activeKey)?.server ?? '') : false;
 
   return (
@@ -374,6 +384,11 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
             <Icon name="chevron-left" size={22} color={theme.text} />
           </Pressable>
         )}
+        {showingRoomHeader && headerInfo!.avatar ? (
+          <View style={styles.headerAvatar}>
+            <ChatAvatar {...headerInfo!.avatar} size={32} />
+          </View>
+        ) : null}
         <Pressable
           style={({pressed}) => [styles.headerTextArea, pressed && showingRoomHeader && headerInfo!.onPress && styles.headerPressed]}
           disabled={!(showingRoomHeader && headerInfo!.onPress)}
@@ -419,6 +434,9 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
         )}
       </View>
 
+      {route.name !== 'voice' && <VoiceBar navigate={navigate} />}
+      <RemoteAudio />
+
       <View style={styles.bodyArea}>
         {peekList && (
           // The list the back-swipe returns to, revealed as the chat slides off.
@@ -440,6 +458,9 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
           {route.name === 'newRoom' && <NewRoomScreen onNavigate={navigate} />}
           {route.name === 'join' && <JoinScreen key={route.link ?? ''} link={route.link} onNavigate={navigate} />}
           {route.name === 'settings' && <SettingsScreen onForgotten={onForgotten} />}
+          {route.name === 'voice' && (
+            <VoiceScreen key={route.key} roomKey={route.key} onNavigate={navigate} onHeaderChange={setHeaderInfo} />
+          )}
         </Animated.View>
       </View>
     </SafeAreaView>
@@ -470,6 +491,7 @@ function makeStyles(theme: Theme) {
       borderBottomColor: theme.border,
     },
     headerBack: {width: 36, height: 36, alignItems: 'center', justifyContent: 'center', marginRight: 4, marginLeft: -6},
+    headerAvatar: {marginRight: 10},
     headerTextArea: {flex: 1, minWidth: 0, borderRadius: 6},
     headerPressed: {opacity: 0.6},
     headerTitleRow: {flexDirection: 'row', alignItems: 'center', gap: 2},

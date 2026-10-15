@@ -113,3 +113,29 @@ export async function sendTestNotification(): Promise<void> {
     },
   });
 }
+
+/**
+ * Someone opened a room's voice that was empty. Only then: joining a voice
+ * room that already has people in it doesn't notify anyone.
+ */
+export async function notifyVoiceStart(room: Room, member: string, inThatVoice: boolean): Promise<void> {
+  const s = settingsStore.get();
+  if (!s.bgNotifications || room.key === viewingRoom || inThatVoice) return;
+  await ensureChannels();
+  const name = room.view?.names[member] ?? fingerprint(member);
+  const roomName = room.view?.name ?? 'Super Chat';
+  await notifee.displayNotification({
+    id: `voice-${nid(room.key)}`.slice(0, 64),
+    title: roomName,
+    body: s.notifPreviews ? `🔊 ${name} is in voice` : '🔊 Someone is in voice',
+    data: {roomKey: room.key, ...PREFER_SMALL_ICON},
+    android: {
+      channelId: CH_MESSAGES,
+      smallIcon: 'ic_notification',
+      color: await notificationColor(),
+      pressAction: PRESS_ACTION,
+      timestamp: Date.now(),
+      showTimestamp: true,
+    },
+  });
+}
