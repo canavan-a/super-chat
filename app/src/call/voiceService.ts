@@ -4,7 +4,7 @@
 // the microphone service type so Android keeps the mic and audio going with
 // the app in the background. Android 14 only allows that type to start
 // while the app is in the foreground, which joining always is.
-import {Platform} from 'react-native';
+import {PermissionsAndroid, Platform} from 'react-native';
 
 import type {VoiceView} from './engine';
 
@@ -30,6 +30,16 @@ export function handleVoiceAction(id: string | undefined): boolean {
 let shown: string | null = null;
 
 async function show(view: VoiceView, roomName: string) {
+  // Android kills the app if a microphone-type foreground service starts
+  // without the mic permission; never risk it.
+  if (
+    !(await PermissionsAndroid.check(
+      PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+    ))
+  ) {
+    shown = null;
+    return;
+  }
   const [{default: notifee, AndroidForegroundServiceType}, ch, msgs] =
     await Promise.all([
       import('@notifee/react-native'),

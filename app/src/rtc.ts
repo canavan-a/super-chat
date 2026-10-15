@@ -16,10 +16,20 @@ export const rtcPlatform = {
 
   async micPermission(): Promise<boolean> {
     if (Platform.OS !== 'android') return true;
-    const res = await PermissionsAndroid.request(
-      PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+    // Bluetooth (Android 12+) is optional: without it, headsets just aren't
+    // offered as an audio route.
+    const wanted = [PermissionsAndroid.PERMISSIONS.RECORD_AUDIO];
+    if (
+      Number(Platform.Version) >= 31 &&
+      PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT
+    ) {
+      wanted.push(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT);
+    }
+    const res = await PermissionsAndroid.requestMultiple(wanted);
+    return (
+      res[PermissionsAndroid.PERMISSIONS.RECORD_AUDIO] ===
+      PermissionsAndroid.RESULTS.GRANTED
     );
-    return res === PermissionsAndroid.RESULTS.GRANTED;
   },
 
   getMic(): Promise<MediaStream> {

@@ -228,7 +228,16 @@ export function createVoiceEngine(deps: VoiceDeps) {
   function notify() {
     view = buildView();
     listeners.forEach(l => l());
-    if (session && view.phase !== 'idle') deps.service.update(view, roomName());
+    // The Android voice notification is a microphone-type foreground
+    // service, which Android 14+ refuses (killing the app) unless the mic
+    // permission is already granted: only once the mic is actually open.
+    const ph = view.phase;
+    if (
+      session?.stream &&
+      (ph === 'finding' || ph === 'connecting' || ph === 'live')
+    ) {
+      deps.service.update(view, roomName());
+    }
   }
 
   function roomName() {

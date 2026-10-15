@@ -397,7 +397,11 @@ function network(
       onStoreChange: () => () => {},
       presenceCount: () =>
         clients.filter(o => o !== c && o.engine.active()).length,
-      service: {update() {}, stop() {}},
+      service: {
+        update: () =>
+          ((c as any).serviceCalls ??= []).push(c.mic ? 'mic-open' : 'no-mic'),
+        stop() {},
+      },
       randomId: () => `${member}-s${n++}`,
       now: () => Date.now(),
     };
@@ -669,5 +673,21 @@ describe('voice pre-warming', () => {
     await a.engine.prewarm(ROOM, 1);
     jest.advanceTimersByTime(WARM_MS);
     expect(a.pcs.every(pc => pc.closed)).toBe(true);
+  });
+});
+
+describe('voice notification (Android foreground service)', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  it('never starts before the microphone is open', async () => {
+    // Android 14+ kills the app if a microphone-type foreground service
+    // starts without the mic permission.
+    const a = network().add('A');
+    await join(a);
+    jest.advanceTimersByTime(FIND_MS);
+    const calls: string[] = (a as any).serviceCalls ?? [];
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every(c => c === 'mic-open')).toBe(true);
   });
 });
