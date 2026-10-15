@@ -1,8 +1,9 @@
 // Settings → Voice: the STUN/TURN servers this device uses for voice (an
 // editable list, which may be empty), the chat server's relay, and relay-only
 // mode. These stay on this device: they're never synced or sent to anyone.
-import React, {useEffect, useState} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {
+  ActivityIndicator,
   Pressable,
   StyleSheet,
   Switch,
@@ -14,10 +15,16 @@ import {
 import {
   DEFAULT_ICE_SERVERS,
   DEFAULT_STUN,
+  EMPTY_ICE_FORM,
+  entryFromForm,
+  entryKey,
+  iceFormFrom,
   isTurnUrl,
   settingsCoverage,
-  validateIceUrl,
+  defaultIcePort,
+  type IceForm,
   type IceServerEntry,
+  type TurnTransport,
 } from '../call/iceConfig';
 import {testIceServer} from '../call/testIce';
 import {platformConfirm} from '../platformConfirm';
@@ -28,10 +35,16 @@ import {AMBER} from './VoiceBar';
 interface Draft {
   /** Index being edited, or -1 for a new server. */
   index: number;
-  urls: string;
-  username: string;
-  credential: string;
+  form: IceForm;
 }
+
+/** How long typing has to pause before the form tests what's there. */
+const AUTO_TEST_MS = 700;
+
+type FormTest =
+  | {state: 'idle'}
+  | {state: 'testing'; key: string}
+  | {state: 'done'; key: string; ok: boolean; message: string};
 
 export function VoiceSettings(): React.JSX.Element {
   const theme = useTheme();
@@ -39,7 +52,8 @@ export function VoiceSettings(): React.JSX.Element {
   const [s, setS] = useState(settingsStore.get());
   useEffect(() => settingsStore.subscribe(setS), []);
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [draftError, setDraftError] = useState<string | null>(null);
+  const [formTest, setFormTest] = useState<FormTest>({state: 'idle'});
+  const testRun = useRef(0);
   const [tests, setTests] = useState<
     Record<string, {busy: boolean; ok?: boolean; message?: string}>
   >({});
@@ -67,36 +81,65 @@ export function VoiceSettings(): React.JSX.Element {
             : 'No servers: voice only works on the same network.',
         };
 
-  const save = () => {
-    if (!draft) return;
-    const urls = draft.urls.trim();
-    const bad = validateIceUrl(urls);
-    if (bad) {
-      setDraftError(bad);
+  // The server the form currently describes (or what's still missing).
+  const keep =
+    draft && draft.index >= 0 ? list[draft.index]?.credential : undefined;
+  const built = draft ? entryFromForm(draft.form, keep) : null;
+  const draftEntry = built && 'entry' in built ? built.entry : null;
+  const draftKey = draftEntry ? entryKey(draftEntry) : null;
+  const passed =
+    formTest.state === 'done' && formTest.ok && formTest.key === draftKey;
+
+  const testDraft = async (entry: IceServerEntry) => {
+    const run = ++testRun.current;
+    const key = entryKey(entry);
+    setFormTest({state: 'testing', key});
+    const r = await testIceServer(entry);
+    if (run === testRun.current)
+      setFormTest({state: 'done', key, ok: r.ok, message: r.message});
+  };
+
+  // Test automatically once the form describes a complete server and typing
+  // has paused; any change invalidates the last result.
+  useEffect(() => {
+    if (!draftEntry) {
+      testRun.current++;
+      setFormTest({state: 'idle'});
       return;
     }
-    const turn = isTurnUrl(urls);
-    const prev = draft.index >= 0 ? list[draft.index] : undefined;
-    const entry: IceServerEntry = turn
-      ? {
-          urls,
-          username: draft.username.trim() || undefined,
-          // Left blank while editing: keep the saved password.
-          credential:
-            draft.credential ||
-            (prev && prev.urls ? prev.credential : undefined),
-        }
-      : {urls};
-    if (turn && (!entry.username || !entry.credential)) {
-      setDraftError('TURN servers need a username and password');
-      return;
-    }
-    const next = [...list];
-    if (draft.index >= 0) next[draft.index] = entry;
-    else next.push(entry);
-    setList(next);
+    const t = setTimeout(() => testDraft(draftEntry), AUTO_TEST_MS);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]);
+
+  const openForm = (index: number, form: IceForm) => {
+    testRun.current++;
+    setFormTest({state: 'idle'});
+    setDraft({index, form});
+  };
+  const closeForm = () => {
+    testRun.current++;
     setDraft(null);
-    setDraftError(null);
+  };
+  const setForm = (patch: Partial<IceForm>) => {
+    if (draft) setDraft({...draft, form: {...draft.form, ...patch}});
+  };
+
+  const save = () => {
+    if (!draft || !draftEntry || !passed) return;
+    const next = [...list];
+    if (draft.index >= 0) next[draft.index] = draftEntry;
+    else next.push(draftEntry);
+    setList(next);
+    setTests(t => ({
+      ...t,
+      [draftEntry.urls]: {
+        busy: false,
+        ok: true,
+        message: formTest.state === 'done' ? formTest.message : '',
+      },
+    }));
+    closeForm();
   };
 
   const test = async (e: IceServerEntry) => {
@@ -130,15 +173,7 @@ export function VoiceSettings(): React.JSX.Element {
           <View key={`${e.urls}|${i}`} style={styles.row}>
             <Pressable
               style={styles.rowText}
-              onPress={() => {
-                setDraftError(null);
-                setDraft({
-                  index: i,
-                  urls: e.urls,
-                  username: e.username ?? '',
-                  credential: '',
-                });
-              }}>
+              onPress={() => openForm(i, iceFormFrom(e))}>
               <View style={styles.rowTitle}>
                 <View
                   style={[
@@ -185,15 +220,7 @@ export function VoiceSettings(): React.JSX.Element {
             </Pressable>
             <Pressable
               style={styles.btn}
-              onPress={() => {
-                setDraftError(null);
-                setDraft({
-                  index: i,
-                  urls: e.urls,
-                  username: e.username ?? '',
-                  credential: '',
-                });
-              }}>
+              onPress={() => openForm(i, iceFormFrom(e))}>
               <Text style={styles.btnText}>Edit</Text>
             </Pressable>
             <Pressable
@@ -213,32 +240,98 @@ export function VoiceSettings(): React.JSX.Element {
           <Text style={styles.label}>
             {draft.index >= 0 ? 'Edit server' : 'Add server'}
           </Text>
+          <Segmented
+            theme={theme}
+            value={draft.form.kind}
+            options={[
+              {value: 'stun', label: 'STUN'},
+              {value: 'turn', label: 'TURN'},
+            ]}
+            onChange={kind => setForm({kind})}
+          />
+          <Text style={styles.hint}>
+            {draft.form.kind === 'stun'
+              ? 'STUN lets each side find its public address. Free and light, but some networks still block direct connections.'
+              : 'TURN relays the audio when a direct connection fails. It needs a username and password.'}
+          </Text>
           <TextInput
             style={styles.input}
-            value={draft.urls}
-            onChangeText={urls => setDraft({...draft, urls})}
-            placeholder="turns:turn.example.com:443?transport=tcp"
+            value={draft.form.address}
+            onChangeText={address => setForm({address})}
+            placeholder={`${draft.form.kind}.example.com:${defaultIcePort(
+              draft.form.tls,
+            )}`}
             placeholderTextColor={theme.textMuted}
             autoCapitalize="none"
             autoCorrect={false}
+            keyboardType="url"
+            accessibilityLabel="Server address"
           />
-          {isTurnUrl(draft.urls) ? (
+          <Text style={styles.hint}>
+            Host name or IP (IPv6 in [brackets]). Port{' '}
+            {defaultIcePort(draft.form.tls)} if left out. You can also paste a
+            whole {draft.form.kind}: URL.
+          </Text>
+          <View style={styles.switchRowTight}>
+            <View style={styles.flex}>
+              <Text style={styles.label}>
+                Secure (TLS, {draft.form.kind}s:)
+              </Text>
+              <Text style={styles.hint}>
+                {draft.form.kind === 'turn'
+                  ? 'Encrypts the connection to the relay, keeping the username off the network, and gets through strict firewalls (often on port 443).'
+                  : 'STUN over TLS. Rarely needed, and not every browser supports it.'}
+              </Text>
+            </View>
+            <Switch
+              value={draft.form.tls}
+              onValueChange={tls => {
+                setForm({tls});
+              }}
+            />
+          </View>
+          {draft.form.kind === 'turn' ? (
             <>
+              <Text style={styles.label}>Transport</Text>
+              <Segmented
+                theme={theme}
+                value={draft.form.transport}
+                options={[
+                  {value: 'auto', label: 'Auto'},
+                  {value: 'udp', label: draft.form.tls ? 'UDP (DTLS)' : 'UDP'},
+                  {value: 'tcp', label: draft.form.tls ? 'TCP (TLS)' : 'TCP'},
+                ]}
+                onChange={(transport: TurnTransport) => {
+                  setForm({transport});
+                }}
+              />
+              <Text style={styles.hint}>
+                {draft.form.transport === 'auto'
+                  ? 'Let the browser or phone choose. Best unless your server only listens on one.'
+                  : draft.form.transport === 'udp'
+                  ? draft.form.tls
+                    ? 'DTLS over UDP: few servers and clients support it.'
+                    : 'UDP: lowest latency, but some networks block it.'
+                  : draft.form.tls
+                  ? 'TLS over TCP: the most likely to get through strict networks.'
+                  : 'TCP: for networks that block UDP.'}
+              </Text>
               <TextInput
                 style={styles.input}
-                value={draft.username}
-                onChangeText={username => setDraft({...draft, username})}
+                value={draft.form.username}
+                onChangeText={username => setForm({username})}
                 placeholder="Username"
                 placeholderTextColor={theme.textMuted}
                 autoCapitalize="none"
                 autoCorrect={false}
+                accessibilityLabel="Username"
               />
               <TextInput
                 style={styles.input}
-                value={draft.credential}
-                onChangeText={credential => setDraft({...draft, credential})}
+                value={draft.form.password}
+                onChangeText={password => setForm({password})}
                 placeholder={
-                  draft.index >= 0
+                  draft.index >= 0 && keep
                     ? 'Password (leave blank to keep)'
                     : 'Password'
                 }
@@ -246,31 +339,67 @@ export function VoiceSettings(): React.JSX.Element {
                 autoCapitalize="none"
                 autoCorrect={false}
                 secureTextEntry
+                accessibilityLabel="Password"
               />
               <Text style={styles.hint}>
                 People you talk to will see this relay's IP address, so pick one
-                that isn't tied to you if that matters. Prefer turns: (TLS),
-                which keeps the username off the network.
+                that isn't tied to you if that matters.
               </Text>
             </>
           ) : null}
-          {draftError ? (
-            <Text style={[styles.hint, {color: theme.danger}]}>
-              {draftError}
-            </Text>
-          ) : null}
+
+          <View style={styles.testLine}>
+            {formTest.state === 'testing' && formTest.key === draftKey ? (
+              <>
+                <ActivityIndicator size="small" color={theme.textMuted} />
+                <Text style={styles.hint}>Testing…</Text>
+              </>
+            ) : formTest.state === 'done' && formTest.key === draftKey ? (
+              <Text
+                style={[
+                  styles.hint,
+                  {color: formTest.ok ? theme.success : theme.danger},
+                ]}>
+                {formTest.message}
+              </Text>
+            ) : built &&
+              'error' in built &&
+              (draft.form.address ||
+                draft.form.username ||
+                draft.form.password) ? (
+              <Text style={styles.hint}>{built.error}</Text>
+            ) : (
+              <Text style={styles.hint}>
+                It's tested automatically once filled in; it can only be saved
+                once it works.
+              </Text>
+            )}
+          </View>
+
           <View style={styles.actions}>
-            <Pressable
-              style={styles.btn}
-              onPress={() => {
-                setDraft(null);
-                setDraftError(null);
-              }}>
+            <Pressable style={styles.btn} onPress={closeForm}>
               <Text style={styles.btnText}>Cancel</Text>
             </Pressable>
             <Pressable
-              style={[styles.btn, {backgroundColor: theme.primary}]}
-              onPress={save}>
+              style={[styles.btn, !draftEntry && styles.disabled]}
+              disabled={
+                !draftEntry ||
+                (formTest.state === 'testing' && formTest.key === draftKey)
+              }
+              onPress={() => draftEntry && testDraft(draftEntry)}>
+              <Text style={styles.btnText}>Test</Text>
+            </Pressable>
+            <Pressable
+              style={[
+                styles.btn,
+                {backgroundColor: theme.primary},
+                !passed && styles.disabled,
+              ]}
+              disabled={!passed}
+              onPress={save}
+              accessibilityHint={
+                passed ? undefined : 'Available once the test passes'
+              }>
               <Text style={[styles.btnText, {color: theme.primaryText}]}>
                 Save
               </Text>
@@ -281,10 +410,7 @@ export function VoiceSettings(): React.JSX.Element {
         <View style={styles.actions}>
           <Pressable
             style={styles.btn}
-            onPress={() => {
-              setDraftError(null);
-              setDraft({index: -1, urls: '', username: '', credential: ''});
-            }}>
+            onPress={() => openForm(-1, EMPTY_ICE_FORM)}>
             <Text style={styles.btnText}>Add server</Text>
           </Pressable>
           {list.length ? (
@@ -345,6 +471,39 @@ export function VoiceSettings(): React.JSX.Element {
   );
 }
 
+function Segmented<T extends string>({
+  theme,
+  value,
+  options,
+  onChange,
+}: {
+  theme: Theme;
+  value: T;
+  options: {value: T; label: string}[];
+  onChange: (v: T) => void;
+}) {
+  const styles = makeStyles(theme);
+  return (
+    <View style={styles.segmented} accessibilityRole="radiogroup">
+      {options.map(o => {
+        const on = o.value === value;
+        return (
+          <Pressable
+            key={o.value}
+            style={[styles.segment, on && {backgroundColor: theme.surface}]}
+            onPress={() => onChange(o.value)}
+            accessibilityRole="radio"
+            accessibilityState={{selected: on}}>
+            <Text style={[styles.segmentText, on && {color: theme.text}]}>
+              {o.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 function makeStyles(theme: Theme) {
   return StyleSheet.create({
     flex: {flex: 1},
@@ -395,6 +554,24 @@ function makeStyles(theme: Theme) {
       backgroundColor: theme.surface,
     },
     actions: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12},
+    disabled: {opacity: 0.45},
+    testLine: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      minHeight: 22,
+    },
+    switchRowTight: {flexDirection: 'row', alignItems: 'center', gap: 12},
+    segmented: {
+      flexDirection: 'row',
+      gap: 4,
+      padding: 3,
+      borderRadius: 8,
+      backgroundColor: theme.surfaceAlt,
+      alignSelf: 'flex-start',
+    },
+    segment: {paddingHorizontal: 14, paddingVertical: 6, borderRadius: 6},
+    segmentText: {fontSize: 12, fontWeight: '700', color: theme.textMuted},
     switchRow: {
       flexDirection: 'row',
       alignItems: 'center',
