@@ -51,7 +51,8 @@ export function pwa(): Plugin {
       for (const f of files)
         hash.update(f).update(fs.readFileSync(path.join(outDir, f)));
       const version = hash.digest('hex').slice(0, 16);
-      const precache = files.map(f => '/' + f);
+      // The page as "/": many servers redirect /index.html there (see sw.js).
+      const precache = files.map(f => (f === 'index.html' ? '/' : '/' + f));
       const src = fs
         .readFileSync(path.join(root, 'pwa/sw.js'), 'utf8')
         .replace('self.__VERSION__', JSON.stringify(version))
