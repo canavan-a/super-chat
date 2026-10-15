@@ -305,4 +305,26 @@ run('end to end', () => {
 
     for (const c of [alice, bob, carol]) c.store.disconnectAll();
   }, 60_000);
+
+  it('catches up and notifies once after a push wake-up', async () => {
+    const alice = client(url);
+    const bob = client(url);
+    const key = await alice.store.createRoom(url, 'Push', '#4C8BF5', 0, 'Alice');
+    const link = await alice.store.makeInvite(key, {expiresAt: 0, maxUses: 0});
+    const bobKey = await bob.store.join(bob.crypto.parseInviteLink(link)!, 'Bob');
+    await bob.store.openRoom(bobKey);
+    // Bob is offline (not connected): only a push would tell him.
+    bob.store.disconnectAll();
+    const seen: string[] = [];
+    bob.store.onIncoming((_r, m) => seen.push(m.content?.t === 'text' ? m.content.body : '?'));
+
+    await alice.store.send(key, {t: 'text', body: 'wake up bob'});
+    await bob.store.catchUp(bobKey);
+    expect(seen).toEqual(['wake up bob']);
+    // A second wake-up (or the same message by WebSocket) doesn't notify again.
+    await bob.store.catchUp(bobKey);
+    expect(seen).toEqual(['wake up bob']);
+
+    for (const c of [alice, bob]) c.store.disconnectAll();
+  }, 60_000);
 });

@@ -602,6 +602,42 @@ const FULL_REFRESH_EVERY_MS = 5 * 60_000;
  * keeps the rest current anyway). Only every few minutes does it also redo
  * the full reload (new rooms from the vault, each room's log and keys).
  */
+// ---- catching up after a push wake-up (src/push.ts) ----
+
+/** Messages already handed to onIncoming, so one arriving both by push and by WebSocket notifies once. */
+const announced = new Set<string>();
+function announce(r: Room, m: ChatMessage) {
+  if (announced.has(m.id)) return;
+  announced.add(m.id);
+  if (announced.size > 2000) announced.delete(announced.values().next().value!);
+  incomingListeners.forEach(l => l(r, m));
+}
+
+/**
+ * A push said this room has something new: fetch what came after the newest
+ * message held, and notify for it like a WebSocket push would.
+ */
+export async function catchUp(key: string): Promise<void> {
+  const r = rooms.get(key);
+  if (!r || !session.get()) return;
+  if (!r.log) await loadState(r);
+  connect(r.server); // and get the live connection back, if it dropped
+  const newest = r.messages.filter(m => !m.pending).slice(-1)[0];
+  const page = newest
+    ? await api.messages(r.server, r.id, r.me, {after: newest.pos, limit: 50})
+    : await api.messages(r.server, r.id, r.me, {limit: 5});
+  for (const sm of page) {
+    if (r.messages.some(m => m.id === sm.id)) continue;
+    if (!r.keys[sm.epoch]) await loadKeys(r);
+    const dm = decrypt(r, sm);
+    ingest(r, dm);
+    const c = dm.content;
+    const isLine = c?.t === 'text' || c?.t === 'file' || c?.t === 'ice' || !c;
+    if (isLine && sm.sender !== r.me.id) announce(r, dm);
+  }
+  emit();
+}
+
 export async function refreshAll(): Promise<void> {
   if (Date.now() - lastFullRefresh > FULL_REFRESH_EVERY_MS) {
     lastFullRefresh = Date.now();
@@ -992,7 +1028,7 @@ async function handlePush(server: string, msg: any) {
       }
       ingest(r, dm);
       emit();
-      if (isLine && m.sender !== r.me.id) incomingListeners.forEach(l => l(r, dm));
+      if (isLine && m.sender !== r.me.id) announce(r, dm);
       return;
     }
     case 'deleted': {
@@ -1477,25 +1513,54 @@ export function dmPeer(r: Room | undefined): string | null {
   return m.find(x => x.id !== r.me.id)!.id;
 }
 
+/** Whether I'm the only one in the chat. */
+const isSolo = (r: Room): boolean => r.view?.members.length === 1 && r.view.members[0].id === r.me.id;
+
 /**
- * What a chat is called: the other person in a one-to-one chat, else its
- * name, else (no name set, or it was cleared) who's in it.
+ * What a chat is called: the other person in a one-to-one chat, me when
+ * I'm alone in it, else its name, else (no name set, or it was cleared)
+ * who's in it.
  */
 export function chatTitle(r: Room | undefined): string | null {
   const v = r?.view;
   if (!r || !v) return null;
   const peer = dmPeer(r);
   if (peer) return v.names[peer] ?? fingerprint(peer);
+  if (isSolo(r)) return `${v.names[r.me.id] ?? fingerprint(r.me.id)} (You)`;
   if (v.name) return v.name;
   const others = v.members.filter(m => m.id !== r.me.id).map(m => m.name ?? fingerprint(m.id));
   return others.length ? others.join(', ') : 'New chat';
 }
 
-/** The picture a chat shows: the other person's in a one-to-one chat, else the group's. */
+/** The picture a chat shows: the other person's in a one-to-one chat, mine when I'm alone in it, else the group's. */
 export function chatPicture(r: Room | undefined): AvatarRef | null {
   const peer = dmPeer(r);
   if (peer) return r!.view!.avatars[peer] ?? null;
+  if (r && isSolo(r)) return r.view!.avatars[r.me.id] ?? null;
   return r?.view?.picture ?? null;
+}
+
+/**
+ * Who a group chat without a picture shows instead: up to three others
+ * (never me), the latest to speak first, topped up from the rest in a fixed
+ * per-chat shuffle so it doesn't jump around between renders.
+ */
+export function chatFaces(r: Room | undefined): string[] {
+  const v = r?.view;
+  if (!r || !v || v.picture || dmPeer(r)) return [];
+  const others = v.members.map(m => m.id).filter(id => id !== r.me.id);
+  const recent: string[] = [];
+  for (let i = r.messages.length - 1; i >= 0 && recent.length < 3; i--) {
+    const s = r.messages[i].sender;
+    if (others.includes(s) && !recent.includes(s)) recent.push(s);
+  }
+  const mix = (s: string) => {
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    return h;
+  };
+  const rest = others.filter(id => !recent.includes(id)).sort((a, b) => mix(r.key + a) - mix(r.key + b));
+  return [...recent, ...rest].slice(0, 3);
 }
 
 export const setDisplayName = (key: string, displayName: string) =>

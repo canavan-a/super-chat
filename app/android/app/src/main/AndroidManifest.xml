@@ -4,13 +4,14 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- A short tick on long-press and reactions (src/haptics.ts). -->
     <uses-permission android:name="android.permission.VIBRATE" />
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- What only the sideloaded build has (the background connection for
+         notifications, the in-app updater) is in src/sideload/AndroidManifest.xml;
+         the Google Play build adds just the voice service type, in
+         src/play/AndroidManifest.xml. -->
     <!-- Voice rooms (src/call/): the microphone, audio routing (speaker,
          earpiece, Bluetooth headsets), and a microphone-type foreground
          service so voice keeps going with the app in the background. -->
@@ -27,38 +28,6 @@
       android:allowBackup="false"
       android:theme="@style/AppTheme"
       android:supportsRtl="true">
-
-      <!-- Notifee's own foreground-service implementation, used to keep a
-           background WebSocket alive for push notifications (agent-idle /
-           permission-requested) while the app isn't in the foreground —
-           see app/src/service/BackgroundMonitorService.ts. tools:replace is
-           needed because Notifee's AAR merges in this service without a
-           type, and Android 14+ requires a foreground service type matching
-           a held permission (FOREGROUND_SERVICE_DATA_SYNC, above; MICROPHONE
-           while in a voice room, see src/call/voiceService.ts). -->
-      <service
-        android:name="app.notifee.core.ForegroundService"
-        android:foregroundServiceType="dataSync|microphone"
-        android:exported="false"
-        tools:replace="android:foregroundServiceType" />
-
-      <!-- An update download finishing, even with the app closed (UpdateInstaller.kt). -->
-      <receiver android:name=".UpdateDownloadReceiver" android:exported="true">
-        <intent-filter>
-          <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
-        </intent-filter>
-      </receiver>
-
-      <!-- Serves the downloaded APK to the system package installer. -->
-      <provider
-        android:name="androidx.core.content.FileProvider"
-        android:authorities="${applicationId}.updateprovider"
-        android:exported="false"
-        android:grantUriPermissions="true">
-        <meta-data
-          android:name="android.support.FILE_PROVIDER_PATHS"
-          android:resource="@xml/file_paths" />
-      </provider>
 
       <activity
         android:name=".MainActivity"

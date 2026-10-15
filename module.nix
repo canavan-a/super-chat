@@ -84,6 +84,20 @@ in
       '';
     };
 
+    fcmCredentialsFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "/run/secrets/superchat-fcm.json";
+      description = ''
+        Firebase service account key (Firebase console → Project settings →
+        Service accounts → Generate new private key). When set, new messages
+        wake the Google Play build's devices through FCM. Wake-ups carry no
+        content and go to per-room topics, so the server never learns device
+        tokens. Passed via LoadCredential: give a runtime path as a string,
+        not a Nix path literal (which would copy it into the store).
+      '';
+    };
+
     web = {
       enable = lib.mkEnableOption "serving the app's web client on its own port";
       listenAddr = lib.mkOption {
@@ -161,6 +175,8 @@ in
         SUPERCHAT_ANDROID_CERT_SHA256 = lib.concatStringsSep "," cfg.androidCertSha256;
         SUPERCHAT_MAX_BLOB_MB = toString cfg.maxBlobMB;
         SUPERCHAT_TRUST_PROXY = if cfg.trustProxy then "1" else "0";
+      } // lib.optionalAttrs (cfg.fcmCredentialsFile != null) {
+        SUPERCHAT_FCM_CREDENTIALS_FILE = "%d/fcm.json";
       } // lib.optionalAttrs cfg.web.enable {
         SUPERCHAT_STATIC_DIR = webDir;
         SUPERCHAT_STATIC_LISTEN_ADDR = cfg.web.listenAddr;
@@ -186,6 +202,8 @@ in
         RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
         CapabilityBoundingSet = "";
         UMask = "0077";
+      } // lib.optionalAttrs (cfg.fcmCredentialsFile != null) {
+        LoadCredential = [ "fcm.json:${cfg.fcmCredentialsFile}" ];
       };
     };
   };

@@ -11,6 +11,7 @@ import (
 	"main/api"
 	"main/config"
 	"main/database"
+	"main/push"
 	"main/rooms"
 	"main/static"
 	"main/sweeper"
@@ -31,6 +32,18 @@ func main() {
 
 	svc := rooms.NewService(db, cfg.BlobDir)
 	a := api.New(db, cfg, svc)
+	if cfg.FCMCredentialsFile != "" {
+		key, err := os.ReadFile(cfg.FCMCredentialsFile)
+		if err != nil {
+			log.Fatalf("reading SUPERCHAT_FCM_CREDENTIALS_FILE: %v", err)
+		}
+		f, err := push.New(key)
+		if err != nil {
+			log.Fatalf("%v", err)
+		}
+		a.SetPush(f)
+		log.Printf("push: FCM wake-ups on")
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -2,6 +2,9 @@ package api
 
 import (
 	"crypto/ed25519"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -10,6 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"main/proto"
+	"main/push"
 )
 
 type wsClient struct {
@@ -157,5 +161,36 @@ func TestRTCRateLimit(t *testing.T) {
 	// limiter caps a burst at 600.
 	if n == 0 || n > 600 {
 		t.Fatalf("delivered %d", n)
+	}
+}
+
+func TestNewMessageWakesTheRoomsTopic(t *testing.T) {
+	e, r, a, _, _ := threeMembers(t)
+	topics := make(chan string, 10)
+	fcm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var m struct{ Message struct{ Topic string } }
+		_ = json.NewDecoder(req.Body).Decode(&m)
+		topics <- m.Message.Topic
+	}))
+	defer fcm.Close()
+	e.api.SetPush(push.NewWithEndpoint(fcm.URL, fcm.Client()))
+
+	_, code, body := r.send(a, "reaction")
+	want(t, "reaction", code, 201, body)
+	select {
+	case got := <-topics:
+		t.Fatalf("a reaction woke %q", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	_, code, body = r.send(a, "msg")
+	want(t, "message", code, 201, body)
+	select {
+	case got := <-topics:
+		if got != push.Topic(r.id) {
+			t.Fatalf("woke %q, want the room's topic", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a new message didn't wake anyone")
 	}
 }

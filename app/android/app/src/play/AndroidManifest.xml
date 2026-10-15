@@ -1,0 +1,26 @@
+<!-- The Google Play build: merged over src/main/AndroidManifest.xml. No
+     always-on background connection and no in-app updater (Play doesn't
+     allow either): notifications come through FCM, and the foreground
+     service is only for keeping voice going. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application>
+      <!-- Notifee's foreground service, for voice only (microphone). Notifee's
+           AAR merges it in without a type; Android 14+ requires one. -->
+      <service
+        android:name="app.notifee.core.ForegroundService"
+        android:foregroundServiceType="microphone"
+        android:exported="false"
+        tools:replace="android:foregroundServiceType" />
+
+      <!-- Wake-ups from the chat server through FCM (server/push). -->
+      <service
+        android:name=".SuperChatMessagingService"
+        android:exported="false">
+        <intent-filter>
+          <action android:name="com.google.firebase.MESSAGING_EVENT" />
+        </intent-filter>
+      </service>
+    </application>
+</manifest>

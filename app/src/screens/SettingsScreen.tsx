@@ -36,6 +36,7 @@ import {DEFAULT_SERVER, normalizeServer, QUICK_REACTIONS, settingsStore} from '.
 import {getMyAvatar, resetStore, setMyAvatar, useStore} from '../store';
 import {THEME_OPTIONS, Theme, useThemeSetting} from '../theme';
 import {VoiceSettings} from '../components/VoiceSettings';
+import {isSideload} from '../distribution';
 import {InstallCard} from '../components/InstallCard';
 
 type SettingsTab = 'general' | 'account';
@@ -102,7 +103,7 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
   const [checkingUpdates, setCheckingUpdates] = useState(false);
 
   useEffect(() => {
-    if (Platform.OS !== 'android') return;
+    if (Platform.OS !== 'android' || !isSideload) return;
     getVersionInfo()
       .then(v => setVersion(`${v.versionName} (${v.versionCode})`))
       .catch(() => setVersion('unknown'));
@@ -465,7 +466,24 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
             </>
           )}
 
-          {Platform.OS === 'android' && (
+          {Platform.OS === 'android' && !isSideload && (
+            // Google Play build: no background connection (Play doesn't allow
+            // it) and Play installs updates.
+            <>
+              <View style={styles.divider} />
+              <Text style={styles.title2}>Notifications</Text>
+              <Text style={styles.hint}>New messages notify while Super Chat is open or was just in use.</Text>
+              <View style={styles.rowBetween}>
+                <View style={styles.rowBetweenText}>
+                  <Text style={styles.label}>Show message text</Text>
+                  <Text style={styles.hint}>Off shows only the room name, so nothing readable sits on the lock screen.</Text>
+                </View>
+                <Switch value={s.notifPreviews} onValueChange={v => settingsStore.update({notifPreviews: v})} />
+              </View>
+            </>
+          )}
+
+          {Platform.OS === 'android' && isSideload && (
             <>
               <View style={styles.divider} />
               <Text style={styles.title2}>App updates</Text>

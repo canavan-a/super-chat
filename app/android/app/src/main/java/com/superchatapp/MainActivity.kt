@@ -16,16 +16,14 @@ class MainActivity : ReactActivity() {
     super.onCreate(savedInstanceState)
   }
 
-  // Lets a finished update download open the installer straight away while
-  // the app is on screen, or as soon as it comes back (UpdateInstaller.kt).
+  // Build-specific hooks (the sideload build's updater; see Flavor.kt).
   override fun onResume() {
     super.onResume()
-    UpdateInstaller.foreground = true
-    UpdateInstaller.promptIfPending(this)
+    Flavor.onResume(this)
   }
 
   override fun onPause() {
-    UpdateInstaller.foreground = false
+    Flavor.onPause()
     super.onPause()
   }
 

@@ -17,7 +17,8 @@ class MainApplication : Application(), ReactApplication {
       object : DefaultReactNativeHost(this) {
         override fun getPackages(): List<ReactPackage> =
             PackageList(this).packages.apply {
-              add(AppUpdaterPackage())
+              addAll(Flavor.packages())
+              add(DistributionPackage())
               add(AppIconPackage())
               add(FileSaverPackage())
               add(ScryptPackage())

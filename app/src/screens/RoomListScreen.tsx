@@ -1,5 +1,5 @@
 import React, {useMemo, useRef, useState} from 'react';
-import {FlatList, Pressable, StyleSheet, Text, View} from 'react-native';
+import {Alert, FlatList, Pressable, StyleSheet, Text, View} from 'react-native';
 
 import {voiceSummary} from '../call/engine';
 import {roomVoice, useVoice} from '../call/voice';
@@ -8,8 +8,10 @@ import {Icon} from '../components/Icon';
 import {Overlay} from '../components/Overlay';
 import {PixelField} from '../components/PixelField';
 import {SpringyPull} from '../components/SpringyPull';
+import {tick} from '../haptics';
+import {platformConfirm} from '../platformConfirm';
 import {Route} from '../routes';
-import {refreshAll, RoomListItem, useStore} from '../store';
+import {getRoom, leave, refreshAll, RoomListItem, useStore} from '../store';
 import {Theme, useTheme} from '../theme';
 
 /**
@@ -42,6 +44,25 @@ export function RoomListScreen({
     ),
   );
 
+  // Long-press a chat: a menu offering to leave it (with the same
+  // confirmation, and only-admin warning, as the room settings).
+  const [menuFor, setMenuFor] = useState<RoomListItem | null>(null);
+  const confirmLeave = (item: RoomListItem) => {
+    setMenuFor(null);
+    const view = getRoom(item.key)?.view;
+    const admins = view?.members.filter(m => m.role === 'admin') ?? [];
+    const lastAdmin =
+      !!view && view.members.length > 1 && admins.length === 1 && admins[0].id === getRoom(item.key)!.me.id;
+    platformConfirm(
+      `Leave ${item.name}?`,
+      lastAdmin
+        ? "You're the only admin. Make someone else admin first, or nobody will be able to invite or manage members."
+        : "You'll lose access to this room and its messages on this device.",
+      'Leave',
+      () => leave(item.key).catch(e => Alert.alert("Couldn't leave", (e as Error).message || String(e))),
+    );
+  };
+
   const go = (route: Route) => {
     setAddOpen(false);
     onNavigate(route);
@@ -71,7 +92,11 @@ export function RoomListScreen({
                   unread && styles.rowUnread,
                   pressed && styles.rowPressed,
                 ]}
-                onPress={() => onNavigate({name: 'room', key: item.key})}>
+                onPress={() => onNavigate({name: 'room', key: item.key})}
+                onLongPress={() => {
+                  tick();
+                  setMenuFor(item);
+                }}>
                 <ChatAvatar roomKey={item.key} picture={item.picture} color={item.color} size={44} />
                 <View style={styles.rowBody}>
                   <View style={styles.rowTop}>
@@ -150,6 +175,18 @@ export function RoomListScreen({
           <Pressable style={styles.sheetRow} onPress={() => go({name: 'join'})}>
             <Icon name="link" size={18} color={theme.text} />
             <Text style={styles.sheetText}>Join via link</Text>
+          </Pressable>
+        </View>
+      </Overlay>
+
+      <Overlay visible={menuFor !== null} onClose={() => setMenuFor(null)} style={styles.menuBackdrop}>
+        <View style={styles.sheet}>
+          <Text style={styles.menuTitle} numberOfLines={1}>
+            {menuFor?.name}
+          </Text>
+          <Pressable style={styles.sheetRow} onPress={() => menuFor && confirmLeave(menuFor)}>
+            <Icon name="close" size={18} color={theme.danger} />
+            <Text style={[styles.sheetText, styles.dangerText]}>Leave chat</Text>
           </Pressable>
         </View>
       </Overlay>
@@ -240,5 +277,18 @@ function makeStyles(theme: Theme) {
     },
     sheetRow: {flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 14},
     sheetText: {fontSize: 15, fontWeight: '600', color: theme.text},
+    // A chat's long-press menu: centered, titled with the chat.
+    menuBackdrop: {justifyContent: 'center', alignItems: 'center', padding: 32},
+    menuTitle: {
+      paddingHorizontal: 16,
+      paddingTop: 10,
+      paddingBottom: 8,
+      fontSize: 13,
+      fontWeight: '700',
+      color: theme.textMuted,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.border,
+    },
+    dangerText: {color: theme.danger},
   });
 }

@@ -88,6 +88,21 @@ android {
         versionCode project.hasProperty("versionCode") ? project.getProperty("versionCode").toInteger() : 1
         versionName project.hasProperty("versionName") ? project.getProperty("versionName") : "0.0.0"
     }
+    // Two builds of the same app (same ID and signing key):
+    //  sideload  distributed by release/release.sh: an always-on background
+    //            connection for notifications, and the in-app updater.
+    //  play      for Google Play, which allows neither: src/play has no
+    //            updater and no data-sync service.
+    // JS reads which one it is from the Distribution module (src/distribution.ts).
+    flavorDimensions "distribution"
+    productFlavors {
+        sideload {
+            dimension "distribution"
+        }
+        play {
+            dimension "distribution"
+        }
+    }
     signingConfigs {
         debug {
             storeFile file('debug.keystore')
@@ -126,6 +141,13 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+
+    // FCM wake-ups, Google Play build only (src/play): the sideload build has
+    // no Google code at all. Firebase's settings are src/play/res/values/
+    // google_services.xml rather than the google-services Gradle plugin,
+    // which would apply to both builds.
+    playImplementation platform("com.google.firebase:firebase-bom:33.16.0")
+    playImplementation "com.google.firebase:firebase-messaging"
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

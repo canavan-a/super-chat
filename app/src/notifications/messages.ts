@@ -5,6 +5,7 @@
 import notifee, {AndroidStyle} from '@notifee/react-native';
 
 import {fingerprint} from '../crypto';
+import {isSideload} from '../distribution';
 import {rgbToHex, themeAccent} from '../logo/logoTheme';
 import {settingsStore} from '../settings';
 import type {ChatMessage, Room} from '../store';
@@ -18,6 +19,13 @@ export async function notificationColor(): Promise<string> {
   const {themeName} = await settingsStore.load();
   return rgbToHex(themeAccent(THEMES[themeName] ?? THEMES.dark));
 }
+
+/**
+ * The sideloaded build notifies when "Notify on new messages" is on (it
+ * starts the background service). The Google Play build has no such switch:
+ * it notifies while the app is running.
+ */
+const notificationsOn = (bgSetting: boolean) => (isSideload ? bgSetting : true);
 
 const nid = (roomKey: string) => `room-${roomKey.replace(/[^A-Za-z0-9_-]/g, '')}`.slice(0, 64);
 
@@ -43,7 +51,7 @@ const MAX_LINES = 25;
 
 export async function notifyMessage(room: Room, msg: ChatMessage): Promise<void> {
   const s = settingsStore.get();
-  if (!s.bgNotifications || room.key === viewingRoom) return;
+  if (!notificationsOn(s.bgNotifications) || room.key === viewingRoom) return;
   await ensureChannels();
   const c = msg.content;
   const line: Line = {
@@ -122,7 +130,7 @@ export async function sendTestNotification(): Promise<void> {
  */
 export async function notifyVoiceStart(room: Room, member: string, inThatVoice: boolean): Promise<void> {
   const s = settingsStore.get();
-  if (!s.bgNotifications || room.key === viewingRoom || inThatVoice) return;
+  if (!notificationsOn(s.bgNotifications) || room.key === viewingRoom || inThatVoice) return;
   await ensureChannels();
   const name = room.view?.names[member] ?? fingerprint(member);
   const roomName = room.view?.name ?? 'Super Chat';

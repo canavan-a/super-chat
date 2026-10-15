@@ -1,5 +1,6 @@
 *
 !.gitignore
 !release.sh
+!release-play.sh
 !gen-keystore.sh
 !README.md

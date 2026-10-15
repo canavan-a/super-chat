@@ -20,14 +20,17 @@ import (
 	"main/config"
 	"main/database"
 	"main/proto"
+	"main/push"
 	"main/rooms"
 )
 
 type API struct {
-	db     *gorm.DB
-	cfg    config.Config
-	rooms  *rooms.Service
-	hub    *Hub
+	db    *gorm.DB
+	cfg   config.Config
+	rooms *rooms.Service
+	hub   *Hub
+	// push wakes Play-build devices on new messages; nil sends nothing.
+	push   *push.FCM
 	nonces *nonces
 	now    func() time.Time
 
@@ -60,6 +63,9 @@ func New(db *gorm.DB, cfg config.Config, svc *rooms.Service) *API {
 	svc.OnDeleted = a.onDeleted
 	return a
 }
+
+// SetPush turns on FCM wake-ups for new messages.
+func (a *API) SetPush(f *push.FCM) { a.push = f }
 
 // SetClock replaces the API's clock (tests).
 func (a *API) SetClock(now func() time.Time) { a.now = now; a.rooms.Now = now }
@@ -330,6 +336,11 @@ func (a *API) postMessage(c *gin.Context) {
 		return
 	}
 	a.hub.SendRoom(st.Room, wsMsg{"type": "message", "room": st.Room, "message": msg}, "")
+	// Devices that aren't connected right now (Google Play build) are woken
+	// to fetch it. Reactions and receipts don't notify, so don't wake.
+	if req.Kind == "msg" {
+		a.push.Wake(st.Room)
+	}
 	c.JSON(http.StatusCreated, gin.H{"pos": msg.Pos, "createdAt": msg.CreatedAt})
 }
 

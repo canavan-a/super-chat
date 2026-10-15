@@ -43,6 +43,15 @@ export function backgroundRunner(): Promise<void> {
   });
 }
 
+/**
+ * The Google Play build (no background service): the same notifications, but
+ * only while the app's process is running.
+ */
+export function watchWhileOpen(): void {
+  void ensureChannels();
+  watch();
+}
+
 // Must be called from the foreground (Android 12+ won't start a foreground
 // service from the background).
 export async function startMonitoring(): Promise<void> {

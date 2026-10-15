@@ -31,7 +31,7 @@ this checkout.**
 
 The script: checks the toolchain, sources `keystore.env`, lists existing
 `app-v*` tags, prompts for the new tag (e.g. `app-v0.3.2`) and a
-`versionCode`, runs the real `./gradlew assembleRelease` with full output,
+`versionCode`, runs the real `./gradlew assembleSideloadRelease` with full output,
 then — after a single confirmation — creates and pushes the tag and publishes
 a GitHub Release with the signed APK attached (named `superchat-<tag>.apk`,
 matching `app/src/appUpdater.ts`'s `APK_NAME` regex so the in-app updater
@@ -41,3 +41,20 @@ Assumes `git`, `java`, the Android SDK/build-tools, and `gh` (authenticated)
 are installed — all present in this repo's `nix develop` shell.
 
 The signed APK is also left at `release/superchat-<tag>.apk` (gitignored).
+
+## Google Play build
+
+The app has two flavors (`app/android/app/build.gradle`): `sideload`, which
+`release.sh` builds and the in-app updater installs, and `play`, for Google
+Play (FCM notifications; no in-app updater or always-on background
+connection, which Play doesn't allow). Build the Play app bundle with:
+
+```sh
+release/release-play.sh
+```
+
+It suggests the next version from the last Play build (`play-version.env`,
+with every build logged in `play-releases.log`; both gitignored), builds and
+signs `superchat-play-<version>.aab` here, and only records the version once
+the build worked. Play's versionCodes start at 100, above the sideload
+builds', so the two never collide. Upload the `.aab` in the Play Console.

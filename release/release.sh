@@ -19,7 +19,9 @@ APP_DIR="$REPO_ROOT/app"
 APP_ANDROID="$APP_DIR/android"
 ENV_FILE="$SCRIPT_DIR/keystore.env"
 KEYSTORE_FILE="$SCRIPT_DIR/release.keystore"
-APK_BUILT="$APP_ANDROID/app/build/outputs/apk/release/app-release.apk"
+# The sideload flavor (in-app updater, background notifications); the Google
+# Play build is `./gradlew bundlePlayRelease` instead (see README).
+APK_BUILT="$APP_ANDROID/app/build/outputs/apk/sideload/release/app-sideload-release.apk"
 TAG_PREFIX="app-v"
 
 bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -165,7 +167,7 @@ fi
 
 (
 	cd "$APP_ANDROID"
-	./gradlew --no-daemon assembleRelease \
+	./gradlew --no-daemon assembleSideloadRelease \
 		-PversionName="$versionName" \
 		-PversionCode="$versionCode"
 )

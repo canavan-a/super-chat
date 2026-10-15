@@ -291,3 +291,22 @@ STUN/TURN servers on its own list (added by hand, or from a server someone
 shared in a chat), which are never sent to the server. A shared server is an
 ordinary message with content `{t: "ice", server: {urls, username?,
 credential?}}`, so only the room's members can read it.
+
+## Push (Google Play build)
+
+The Google Play build of the app has no always-on connection; new messages
+wake it through Firebase Cloud Messaging instead (the sideloaded build keeps
+its WebSocket). Each room has an FCM topic:
+
+```
+topic = "sc-" ‖ b64(sha256("superchat-topic|" ‖ room)[0:16])
+```
+
+Devices subscribe to their rooms' topics themselves, so the server never
+holds a device token and can't link one device's member IDs across rooms.
+When a `msg` is posted, the server sends the room's topic a data-only message
+`{"w": "1"}` (high priority, collapsed per topic, at most one per room every
+3 s, with a trailing one for anything in between). The woken app fetches the
+new messages and decrypts them itself; Google learns only that a device was
+woken. With the app closed (its keys not in memory until unlock), it shows a
+plain "New message".

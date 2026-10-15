@@ -110,7 +110,8 @@ export const voiceService = {
     shown = null;
     (async () => {
       const {settingsStore} = await import('../settings');
-      if (settingsStore.get().bgNotifications) {
+      const {isSideload} = await import('../distribution');
+      if (isSideload && settingsStore.get().bgNotifications) {
         // Back to the plain background-messages notification.
         const {startMonitoring} = await import(
           '../service/BackgroundMonitorService'

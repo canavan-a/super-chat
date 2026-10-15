@@ -24,6 +24,7 @@ import {voice} from './call/voice';
 import {applyUpdateIfSafe, setThemeColor, startPwa} from './pwa/pwa';
 import {ChatAvatar} from './components/ChatAvatar';
 import {CrashScreen} from './components/CrashScreen';
+import {isSideload} from './distribution';
 import {PortalOutlet, PortalProvider} from './components/Portal';
 import {PixelField} from './components/PixelField';
 import {Icon, IconName} from './components/Icon';
@@ -197,7 +198,12 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
   // screen.
   useEffect(() => {
     if (Platform.OS !== 'android') return;
-    if (settingsStore.get().bgNotifications) {
+    if (!isSideload) {
+      // Google Play build: no background service. Notify while the app runs,
+      // and get woken through FCM when it doesn't (src/push.ts).
+      import('./service/BackgroundMonitorService').then(({watchWhileOpen}) => watchWhileOpen());
+      import('./push').then(({startPush}) => startPush().catch(() => {}));
+    } else if (settingsStore.get().bgNotifications) {
       import('./service/BackgroundMonitorService').then(({startMonitoring}) => startMonitoring().catch(() => {}));
     }
   }, []);
@@ -210,10 +216,11 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
     const updates = import('./notifications/updates');
     updates.then(async ({nagForPermission, checkForUpdate}) => {
       await nagForPermission();
-      await checkForUpdate({force: true});
+      // The Google Play build is updated by Play, never by the app.
+      if (isSideload) await checkForUpdate({force: true});
     });
     const sub = AppState.addEventListener('change', state => {
-      if (state === 'active') updates.then(({checkForUpdate}) => checkForUpdate());
+      if (state === 'active' && isSideload) updates.then(({checkForUpdate}) => checkForUpdate());
     });
     return () => sub.remove();
   }, []);

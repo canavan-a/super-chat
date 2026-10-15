@@ -26,22 +26,26 @@ type Config struct {
 	// StaticDir, when set, serves the built web client on StaticListenAddr.
 	StaticDir        string
 	StaticListenAddr string
+	// FCMCredentialsFile is a Firebase service account key. When set, new
+	// messages wake the Google Play build's devices through FCM (package push).
+	FCMCredentialsFile string
 }
 
 func Load() Config {
 	dataDir := getEnv("SUPERCHAT_DATA_DIR", ".data")
 	maxMB, _ := strconv.Atoi(getEnv("SUPERCHAT_MAX_BLOB_MB", "25"))
 	return Config{
-		ListenAddr:        getEnv("SUPERCHAT_LISTEN_ADDR", ":8080"),
-		DataDir:           dataDir,
-		DBPath:            getEnv("SUPERCHAT_DB_PATH", filepath.Join(dataDir, "superchat.db")),
-		BlobDir:           filepath.Join(dataDir, "blobs"),
-		PublicOrigin:      strings.TrimRight(os.Getenv("SUPERCHAT_PUBLIC_ORIGIN"), "/"),
-		AndroidCertSHA256: splitList(os.Getenv("SUPERCHAT_ANDROID_CERT_SHA256")),
-		MaxBlobBytes:      int64(maxMB) << 20,
-		TrustProxy:        os.Getenv("SUPERCHAT_TRUST_PROXY") == "1",
-		StaticDir:         os.Getenv("SUPERCHAT_STATIC_DIR"),
-		StaticListenAddr:  getEnv("SUPERCHAT_STATIC_LISTEN_ADDR", ":8081"),
+		ListenAddr:         getEnv("SUPERCHAT_LISTEN_ADDR", ":8080"),
+		DataDir:            dataDir,
+		DBPath:             getEnv("SUPERCHAT_DB_PATH", filepath.Join(dataDir, "superchat.db")),
+		BlobDir:            filepath.Join(dataDir, "blobs"),
+		PublicOrigin:       strings.TrimRight(os.Getenv("SUPERCHAT_PUBLIC_ORIGIN"), "/"),
+		AndroidCertSHA256:  splitList(os.Getenv("SUPERCHAT_ANDROID_CERT_SHA256")),
+		MaxBlobBytes:       int64(maxMB) << 20,
+		TrustProxy:         os.Getenv("SUPERCHAT_TRUST_PROXY") == "1",
+		StaticDir:          os.Getenv("SUPERCHAT_STATIC_DIR"),
+		StaticListenAddr:   getEnv("SUPERCHAT_STATIC_LISTEN_ADDR", ":8081"),
+		FCMCredentialsFile: os.Getenv("SUPERCHAT_FCM_CREDENTIALS_FILE"),
 	}
 }
 
