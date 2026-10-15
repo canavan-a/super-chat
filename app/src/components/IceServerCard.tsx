@@ -144,7 +144,7 @@ function AddSheet({
   );
 
   return (
-    <Overlay visible onClose={onClose} style={styles.layer}>
+    <Overlay visible modal onClose={onClose} style={styles.layer}>
       <View style={styles.sheet}>
         <Text style={styles.title}>{d.kind} server</Text>
         <Text style={styles.hint}>Shared by {sharedBy}</Text>

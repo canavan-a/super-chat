@@ -24,6 +24,7 @@ import {voice} from './call/voice';
 import {applyUpdateIfSafe, setThemeColor, startPwa} from './pwa/pwa';
 import {ChatAvatar} from './components/ChatAvatar';
 import {CrashScreen} from './components/CrashScreen';
+import {PortalOutlet, PortalProvider} from './components/Portal';
 import {PixelField} from './components/PixelField';
 import {Icon, IconName} from './components/Icon';
 import {AvatarRef, parseInviteLink} from './crypto';
@@ -464,6 +465,8 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
           )}
         </Animated.View>
       </View>
+      {/* Modal sheets (Overlay modal), over everything. */}
+      <PortalOutlet />
     </SafeAreaView>
   );
 }
@@ -542,9 +545,11 @@ function App(): React.JSX.Element {
     <CrashScreen>
       <ThemeProvider>
         <ThemeChrome />
-        <SplashGate>
-          <AccountGate />
-        </SplashGate>
+        <PortalProvider>
+          <SplashGate>
+            <AccountGate />
+          </SplashGate>
+        </PortalProvider>
       </ThemeProvider>
     </CrashScreen>
   );

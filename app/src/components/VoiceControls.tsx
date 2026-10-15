@@ -172,7 +172,7 @@ function OutputPicker({
 }) {
   const v = useVoice();
   return (
-    <Overlay visible onClose={onClose} style={styles.center}>
+    <Overlay visible modal onClose={onClose} style={styles.center}>
       <View
         style={[
           styles.sheet,

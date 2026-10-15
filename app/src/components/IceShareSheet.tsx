@@ -66,7 +66,7 @@ export function IceShareSheet({
   };
 
   return (
-    <Overlay visible onClose={onClose} style={styles.layer}>
+    <Overlay visible modal onClose={onClose} style={styles.layer}>
       <View style={styles.sheet}>
         <Text style={styles.title}>Share {d.kind} server</Text>
         <Text style={styles.hint} numberOfLines={1}>
@@ -142,7 +142,8 @@ function makeStyles(theme: Theme) {
     title: {fontSize: 16, fontWeight: '700', color: theme.text},
     hint: {fontSize: 12, color: theme.textMuted, lineHeight: 17},
     status: {fontSize: 13, fontWeight: '600'},
-    list: {marginTop: 6, flexGrow: 0},
+    // Shrinks to fit the sheet, and scrolls, when there are many chats.
+    list: {marginTop: 6, flexGrow: 0, flexShrink: 1},
     row: {
       flexDirection: 'row',
       alignItems: 'center',

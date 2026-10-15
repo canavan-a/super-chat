@@ -1,5 +1,5 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
+import {ActivityIndicator, AppState, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 
 import {Icon} from '../components/Icon';
 import {loadIdentity, NEEDS_PASSPHRASE} from '../keystore';
@@ -10,6 +10,14 @@ import {makeStyles, PassphraseForm} from './OnboardingScreen';
 
 /** Longest a fingerprint/PIN unlock may take before the screen gives up on it. */
 const UNLOCK_TIMEOUT_MS = 45_000;
+/**
+ * No answer by now usually means the system prompt never appeared (asked for
+ * before the app was really in front, e.g. right after an update). Uncover
+ * the screen and let Unlock be tapped again; a late answer still counts.
+ */
+const PROMPT_STUCK_MS = 6_000;
+/** Let the app finish coming to the front before asking for the fingerprint. */
+const AUTO_PROMPT_DELAY_MS = 300;
 
 /** Keystore failures arrive as Java exception text; say something a person can act on. */
 function friendlyError(e: Error): string {
@@ -56,11 +64,19 @@ export function LockScreen({
         setBusy(false);
         setError("Unlock didn't respond. Tap Unlock to try again.");
       }, UNLOCK_TIMEOUT_MS);
+      const stuck = NEEDS_PASSPHRASE
+        ? null
+        : setTimeout(() => {
+            if (attempt.current !== mine) return;
+            splashHold.release();
+            setBusy(false);
+          }, PROMPT_STUCK_MS);
       try {
         const entropy = await loadIdentity(pass);
         if (entropy) {
           attempt.current++; // nothing after this may touch the screen's state
           clearTimeout(timer);
+          if (stuck) clearTimeout(stuck);
           setOpening(true);
           // Let the spinner draw before the app starts building the rooms.
           requestAnimationFrame(() => setTimeout(() => onUnlock(entropy), 0));
@@ -76,14 +92,35 @@ export function LockScreen({
         setError(friendlyError(e as Error));
       } finally {
         clearTimeout(timer);
+        if (stuck) clearTimeout(stuck);
         if (attempt.current === mine) setBusy(false);
       }
     },
     [onUnlock],
   );
 
+  // Ask for the fingerprint by itself, but only once the app is really in
+  // front: asked any earlier (say, launched by the installer after an
+  // update), the system prompt can silently never appear.
   useEffect(() => {
-    if (!NEEDS_PASSPHRASE) unlock();
+    if (NEEDS_PASSPHRASE) return;
+    let asked = false;
+    let alive = true;
+    let delay: ReturnType<typeof setTimeout> | null = null;
+    const ask = () => {
+      if (asked) return;
+      asked = true;
+      requestAnimationFrame(() => {
+        delay = setTimeout(() => alive && unlock(), AUTO_PROMPT_DELAY_MS);
+      });
+    };
+    if (AppState.currentState === 'active') ask();
+    const sub = AppState.addEventListener('change', st => st === 'active' && ask());
+    return () => {
+      alive = false;
+      if (delay) clearTimeout(delay);
+      sub.remove();
+    };
   }, [unlock]);
 
   return (
