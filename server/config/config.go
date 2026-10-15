@@ -1,13 +1,10 @@
 package config
 
 import (
-	"bytes"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 )
 
 type Config struct {
@@ -29,29 +26,11 @@ type Config struct {
 	// StaticDir, when set, serves the built web client on StaticListenAddr.
 	StaticDir        string
 	StaticListenAddr string
-	// TURNURLs are the STUN/TURN URLs offered to voice clients by
-	// /v1/rooms/:id/turn. With TURNSecret set (coturn's static-auth-secret),
-	// the endpoint also hands out credentials that expire after TURNTTL.
-	TURNURLs   []string
-	TURNSecret []byte
-	TURNTTL    time.Duration
 }
 
 func Load() Config {
 	dataDir := getEnv("SUPERCHAT_DATA_DIR", ".data")
 	maxMB, _ := strconv.Atoi(getEnv("SUPERCHAT_MAX_BLOB_MB", "25"))
-	var turnSecret []byte
-	if f := os.Getenv("SUPERCHAT_TURN_SECRET_FILE"); f != "" {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			log.Fatalf("reading SUPERCHAT_TURN_SECRET_FILE: %v", err)
-		}
-		turnSecret = bytes.TrimSpace(b)
-	}
-	turnTTL, err := time.ParseDuration(getEnv("SUPERCHAT_TURN_TTL", "12h"))
-	if err != nil || turnTTL <= 0 {
-		log.Fatalf("bad SUPERCHAT_TURN_TTL: %q", os.Getenv("SUPERCHAT_TURN_TTL"))
-	}
 	return Config{
 		ListenAddr:        getEnv("SUPERCHAT_LISTEN_ADDR", ":8080"),
 		DataDir:           dataDir,
@@ -63,9 +42,6 @@ func Load() Config {
 		TrustProxy:        os.Getenv("SUPERCHAT_TRUST_PROXY") == "1",
 		StaticDir:         os.Getenv("SUPERCHAT_STATIC_DIR"),
 		StaticListenAddr:  getEnv("SUPERCHAT_STATIC_LISTEN_ADDR", ":8081"),
-		TURNURLs:          splitList(os.Getenv("SUPERCHAT_TURN_URLS")),
-		TURNSecret:        turnSecret,
-		TURNTTL:           turnTTL,
 	}
 }
 

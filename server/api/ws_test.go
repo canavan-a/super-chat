@@ -2,10 +2,6 @@ package api
 
 import (
 	"crypto/ed25519"
-	"crypto/hmac"
-	"crypto/sha1"
-	"encoding/base64"
-	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
@@ -161,46 +157,5 @@ func TestRTCRateLimit(t *testing.T) {
 	// limiter caps a burst at 600.
 	if n == 0 || n > 600 {
 		t.Fatalf("delivered %d", n)
-	}
-}
-
-func TestTurnCreds(t *testing.T) {
-	e, r, a, _, _ := threeMembers(t)
-	outsider := e.user()
-
-	// Not configured: STUN-only (here, no URLs at all).
-	code, body := a.do("GET", "/v1/rooms/"+r.id+"/turn", nil)
-	want(t, "turn unconfigured", code, 200, body)
-	if strings.Contains(body, "credential") {
-		t.Fatalf("no secret should mean no credentials: %s", body)
-	}
-
-	e.api.cfg.TURNURLs = []string{"turn:turn.example:3478"}
-	e.api.cfg.TURNSecret = []byte("s3cret")
-	e.api.cfg.TURNTTL = time.Hour
-
-	code, body = outsider.do("GET", "/v1/rooms/"+r.id+"/turn", nil)
-	want(t, "turn outsider", code, 404, body)
-
-	code, body = a.do("GET", "/v1/rooms/"+r.id+"/turn", nil)
-	want(t, "turn", code, 200, body)
-	var got struct {
-		URLs       []string
-		Username   string
-		Credential string
-		TTL        int
-	}
-	_ = json.Unmarshal([]byte(body), &got)
-	if len(got.URLs) != 1 || got.TTL != 3600 {
-		t.Fatalf("got %+v", got)
-	}
-	exp, label, _ := strings.Cut(got.Username, ":")
-	if exp != strconv.FormatInt(e.now.Add(time.Hour).Unix(), 10) || label == "" || strings.Contains(got.Username, a.id) {
-		t.Fatalf("username %q", got.Username)
-	}
-	mac := hmac.New(sha1.New, []byte("s3cret"))
-	mac.Write([]byte(got.Username))
-	if got.Credential != base64.StdEncoding.EncodeToString(mac.Sum(nil)) {
-		t.Fatalf("credential mismatch")
 	}
 }

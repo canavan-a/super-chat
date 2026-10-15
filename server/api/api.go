@@ -39,7 +39,6 @@ type API struct {
 	blobsPerAcct *limiter
 	blobsPerIP   *limiter
 	readsPerAcct *limiter
-	turnPerAcct  *limiter
 }
 
 func New(db *gorm.DB, cfg config.Config, svc *rooms.Service) *API {
@@ -55,7 +54,6 @@ func New(db *gorm.DB, cfg config.Config, svc *rooms.Service) *API {
 		// alone don't cap one client; these per-IP ones do.
 		blobsPerIP:   newLimiter(40, time.Hour),
 		readsPerAcct: newLimiter(1200, time.Minute),
-		turnPerAcct:  newLimiter(60, time.Hour),
 	}
 	svc.OnEvent = a.onEvent
 	svc.OnRemoved = a.onRemoved
@@ -106,7 +104,6 @@ func (a *API) Router() *gin.Engine {
 	signed.GET("/rooms/:id/messages", a.rateLimit(a.readsPerAcct, byAcct), a.listMessages)
 	signed.POST("/rooms/:id/messages", a.rateLimit(a.msgsPerIP, byIP), a.rateLimit(a.msgsPerAcct, byAcct), a.postMessage)
 	signed.GET("/rooms/:id/invites/uses", a.rateLimit(a.readsPerAcct, byAcct), a.inviteUses)
-	signed.GET("/rooms/:id/turn", a.rateLimit(a.turnPerAcct, byAcct), a.turnCreds)
 	signed.GET("/rooms/:id/blobs/:blob", a.rateLimit(a.readsPerAcct, byAcct), a.getBlob)
 	signed.PUT("/rooms/:id/avatar", a.rateLimit(a.blobsPerAcct, byAcct), a.putAvatar)
 	signed.PUT("/rooms/:id/picture", a.rateLimit(a.blobsPerAcct, byAcct), a.putPicture)

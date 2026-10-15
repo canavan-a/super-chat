@@ -1,5 +1,13 @@
 # Voice rooms (WebRTC mesh audio, up to 8 people)
 
+> **Changes since this plan.** The chat server no longer offers a TURN relay:
+> the `GET /v1/rooms/:id/turn` endpoint, its `turn.*` NixOS options and the
+> "Use the chat server's relay" toggle are gone. Each device uses only the
+> STUN/TURN servers on its own list in Settings → Voice, added by hand (a
+> STUN/TURN form that tests a server before it can be saved) or from a server
+> someone shared in a chat (an `ice` message with an Add card). Mentions of
+> the server relay below are historical.
+
 ## Context
 Super Chat rooms are text-only today. We're giving every chat room a **voice room**: a persistent audio space, like a Discord voice channel.
 - People enter and leave whenever they like. It's "live" while anyone is in it.

@@ -193,7 +193,7 @@ nobody can be waiting on an admin.
 only the latest receipt per sender). `epoch` must be the room's current epoch.
 
 ```
-inner  = JSON {"v":1,"t":"text"|"file"|"reaction"|"receipt", ...content, "ts"}
+inner  = JSON {"v":1,"t":"text"|"file"|"reaction"|"receipt"|"ice", ...content, "ts"}
 sig    = Ed25519(sender, "sc-msg|" ‖ room ‖ "|" ‖ id ‖ "|" ‖ inner)
 ct     = b64(aead(K_epoch, JSON{"c": b64(inner), "s": b64(sig)}, "sc-msg|" ‖ room ‖ "|" ‖ epoch ‖ "|" ‖ id ‖ "|" ‖ sender))
 ```
@@ -203,6 +203,7 @@ The content is one of:
 - file: `{files:[{blob, key, name, mime, size, w?, h?}], body?, replyTo?}`
 - reaction: `{target, emoji, remove?}`
 - receipt: `{upTo}`
+- ice: `{server: {urls, username?, credential?}}`, a STUN/TURN server shared for voice (see "Voice rooms")
 
 **Blobs**: `PUT /v1/rooms/:id/blobs` (raw body, at most 25 MB) → `{id}`, and
 `GET /v1/rooms/:id/blobs/:blob`. The bytes are `aead(fileKey, file, "sc-blob")`.
@@ -285,9 +286,8 @@ sessions. Kinds (`k`):
   Whoever sent the original offer also does ICE restarts.
 - `leave` (broadcast).
 
-**ICE servers**: `GET /v1/rooms/:id/turn` (signed, members only) →
-`{urls, username?, credential?, ttl?}`. With a coturn shared secret
-configured, `username = "<unix expiry>:<random>"` and
-`credential = base64(HMAC-SHA1(secret, username))` (standard base64, padded).
-Clients merge these with STUN/TURN servers the user configured on the device,
-which are never sent anywhere.
+**ICE servers**: the server has no part in them. Each device uses the
+STUN/TURN servers on its own list (added by hand, or from a server someone
+shared in a chat), which are never sent to the server. A shared server is an
+ordinary message with content `{t: "ice", server: {urls, username?,
+credential?}}`, so only the room's members can read it.
