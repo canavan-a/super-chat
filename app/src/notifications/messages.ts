@@ -48,7 +48,9 @@ export async function notifyMessage(room: Room, msg: ChatMessage): Promise<void>
   const c = msg.content;
   const line: Line = {
     sender: room.view?.names[msg.sender] ?? fingerprint(msg.sender),
-    text: (c?.t === 'text' ? c.body : c?.t === 'file' ? c.body || '📎 Attachment' : '🔒 Message').slice(0, 300),
+    text: (
+      c?.t === 'text' ? c.body : c?.t === 'file' ? c.body || '📎 Attachment' : c?.t === 'ice' ? '🔊 Shared a voice server' : '🔒 Message'
+    ).slice(0, 300),
     at: msg.createdAt,
   };
   const lines = [...(unread.get(room.key) ?? []), line].slice(-MAX_LINES);

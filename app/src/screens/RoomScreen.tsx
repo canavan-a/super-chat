@@ -21,6 +21,7 @@ import {openVoice} from '../call/actions';
 import {Avatar} from '../components/Avatar';
 import {PixelField} from '../components/PixelField';
 import {Icon} from '../components/Icon';
+import {IceServerCard} from '../components/IceServerCard';
 import {ImageViewer} from '../components/ImageViewer';
 import {Overlay} from '../components/Overlay';
 import {MarkdownText} from '../components/Markdown';
@@ -302,6 +303,7 @@ export function RoomScreen({
     if (!c) return 'Encrypted message';
     if (c.t === 'text') return c.body;
     if (c.t === 'file') return c.body || `📎 ${c.files.map(f => f.name).join(', ')}`;
+    if (c.t === 'ice') return '🔊 Voice server';
     return '';
   }
 }
@@ -702,7 +704,13 @@ const MessageRow = React.memo(function MessageRow({
               <View style={[styles.quote, {borderLeftColor: mine ? theme.bubbleUserText : theme.primary}]}>
                 <Text style={[styles.quoteName, {color: textColor}]}>{nameOf(reply.sender)}</Text>
                 <Text style={[styles.quoteText, {color: textColor}]} numberOfLines={2}>
-                  {reply.content?.t === 'text' ? reply.content.body : reply.content?.t === 'file' ? '📎 Attachment' : 'Message'}
+                  {reply.content?.t === 'text'
+                    ? reply.content.body
+                    : reply.content?.t === 'file'
+                      ? '📎 Attachment'
+                      : reply.content?.t === 'ice'
+                        ? '🔊 Voice server'
+                        : 'Message'}
                 </Text>
               </View>
             )}
@@ -732,6 +740,7 @@ const MessageRow = React.memo(function MessageRow({
                   />
                 ),
               )}
+            {c?.t === 'ice' ? <IceServerCard server={c.server} mine={mine} sharedBy={name} color={textColor} /> : null}
             {c && (c.t === 'text' || (c.t === 'file' && c.body)) ? (
               <MarkdownText text={c.t === 'text' ? c.body : c.body!} color={textColor} theme={theme} />
             ) : null}

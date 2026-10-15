@@ -257,6 +257,7 @@ function previewLine(r: Room): string | null {
   let what = '🔒 Encrypted message';
   if (c?.t === 'text') what = c.body;
   else if (c?.t === 'file') what = c.body || (c.files.every((f: FileRef) => f.mime.startsWith('image/')) ? '📷 Photo' : `📎 ${c.files[0]?.name ?? 'File'}`);
+  else if (c?.t === 'ice') what = '🔊 Shared a voice server';
   return `${who}: ${what.replace(/\s+/g, ' ').slice(0, 120)}`;
 }
 
@@ -990,7 +991,7 @@ async function handlePush(server: string, msg: any) {
       const m = msg.message as ServerMessage;
       if (!r.keys[m.epoch]) await loadKeys(r);
       const dm = decrypt(r, m);
-      const isLine = dm.content?.t === 'text' || dm.content?.t === 'file' || !dm.content;
+      const isLine = dm.content?.t === 'text' || dm.content?.t === 'file' || dm.content?.t === 'ice' || !dm.content;
       if (isLine && r.typing[m.sender]) {
         const {[m.sender]: _gone, ...rest} = r.typing;
         r.typing = rest;
@@ -1227,7 +1228,7 @@ export async function send(key: string, content: MessageContent, blobs: string[]
   const k = r.keys[epoch];
   if (!k) throw new Error("You don't have this room's key yet.");
   const enc = encryptMessage(r.me, r.id, epoch, k, content);
-  const isLine = content.t === 'text' || content.t === 'file';
+  const isLine = content.t === 'text' || content.t === 'file' || content.t === 'ice';
   const local: ChatMessage = {
     id: enc.id,
     pos: Number.MAX_SAFE_INTEGER,

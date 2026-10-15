@@ -67,7 +67,10 @@ export type MessageContent =
   | {t: 'text'; body: string; replyTo?: string}
   | {t: 'file'; files: FileRef[]; body?: string; replyTo?: string}
   | {t: 'reaction'; target: string; emoji: string; remove?: boolean}
-  | {t: 'receipt'; upTo: string};
+  | {t: 'receipt'; upTo: string}
+  // A STUN/TURN server someone shared for voice (Settings → Voice → Share).
+  // Its credentials are only readable by the room's members, like any message.
+  | {t: 'ice'; server: {urls: string; username?: string; credential?: string}};
 
 export interface FileRef {
   blob: string;

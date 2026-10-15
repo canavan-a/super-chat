@@ -289,6 +289,20 @@ run('end to end', () => {
     bob.store.sendRtc(bobKey, '', {sid: 'b1', k: 'leave'});
     await until(() => alice.store.voicePresence(key).length === 0);
 
+    // Sharing a TURN server: Bob gets it (credentials included), the server
+    // only ever stores ciphertext.
+    const server = {urls: 'turn:relay.example.com?transport=udp', username: 'alice', credential: 'pw-e2e-not-on-server'};
+    await alice.store.send(key, {t: 'ice', server});
+    const got = await until(() => bob.store.getRoom(bobKey)!.messages.find(m => m.content?.t === 'ice'));
+    expect(got.content).toMatchObject({t: 'ice', server});
+    const {DatabaseSync} = require('node:sqlite');
+    const db = new DatabaseSync(path.join(dir, 'superchat.db'), {readOnly: true});
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((t: any) => t.name);
+    const dump = tables.flatMap((t: string) => db.prepare(`SELECT * FROM "${t}"`).all().map((r: any) => JSON.stringify(r))).join('\n');
+    db.close();
+    expect(dump).not.toContain('pw-e2e-not-on-server');
+    expect(dump).not.toContain('relay.example.com');
+
     for (const c of [alice, bob, carol]) c.store.disconnectAll();
   }, 60_000);
 });

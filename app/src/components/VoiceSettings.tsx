@@ -28,6 +28,7 @@ import {
 } from '../call/iceConfig';
 import {testIceServer} from '../call/testIce';
 import {platformConfirm} from '../platformConfirm';
+import {IceShareSheet} from './IceShareSheet';
 import {settingsStore} from '../settings';
 import {Theme, useTheme} from '../theme';
 import {AMBER} from './VoiceBar';
@@ -54,6 +55,7 @@ export function VoiceSettings(): React.JSX.Element {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [formTest, setFormTest] = useState<FormTest>({state: 'idle'});
   const testRun = useRef(0);
+  const [sharing, setSharing] = useState<IceServerEntry | null>(null);
   const [tests, setTests] = useState<
     Record<string, {busy: boolean; ok?: boolean; message?: string}>
   >({});
@@ -220,6 +222,12 @@ export function VoiceSettings(): React.JSX.Element {
             </Pressable>
             <Pressable
               style={styles.btn}
+              onPress={() => setSharing(e)}
+              accessibilityLabel={`Share ${e.urls} to a chat`}>
+              <Text style={styles.btnText}>Share</Text>
+            </Pressable>
+            <Pressable
+              style={styles.btn}
               onPress={() => openForm(i, iceFormFrom(e))}>
               <Text style={styles.btnText}>Edit</Text>
             </Pressable>
@@ -234,6 +242,10 @@ export function VoiceSettings(): React.JSX.Element {
           </View>
         );
       })}
+
+      {sharing ? (
+        <IceShareSheet entry={sharing} onClose={() => setSharing(null)} />
+      ) : null}
 
       {draft ? (
         <View style={styles.form}>
@@ -272,24 +284,12 @@ export function VoiceSettings(): React.JSX.Element {
             {defaultIcePort(draft.form.tls)} if left out. You can also paste a
             whole {draft.form.kind}: URL.
           </Text>
-          <View style={styles.switchRowTight}>
-            <View style={styles.flex}>
-              <Text style={styles.label}>
-                Secure (TLS, {draft.form.kind}s:)
-              </Text>
-              <Text style={styles.hint}>
-                {draft.form.kind === 'turn'
-                  ? 'Encrypts the connection to the relay, keeping the username off the network, and gets through strict firewalls (often on port 443).'
-                  : 'STUN over TLS. Rarely needed, and not every browser supports it.'}
-              </Text>
-            </View>
-            <Switch
-              value={draft.form.tls}
-              onValueChange={tls => {
-                setForm({tls});
-              }}
-            />
-          </View>
+          {draft.form.tls ? (
+            // Only from a pasted or saved stuns:/turns: URL; kept as it is.
+            <Text style={styles.hint}>
+              Uses TLS ({draft.form.kind}s:), from the URL.
+            </Text>
+          ) : null}
           {draft.form.kind === 'turn' ? (
             <>
               <Text style={styles.label}>Transport</Text>
@@ -298,8 +298,8 @@ export function VoiceSettings(): React.JSX.Element {
                 value={draft.form.transport}
                 options={[
                   {value: 'auto', label: 'Auto'},
-                  {value: 'udp', label: draft.form.tls ? 'UDP (DTLS)' : 'UDP'},
-                  {value: 'tcp', label: draft.form.tls ? 'TCP (TLS)' : 'TCP'},
+                  {value: 'udp', label: 'UDP'},
+                  {value: 'tcp', label: 'TCP'},
                 ]}
                 onChange={(transport: TurnTransport) => {
                   setForm({transport});
@@ -307,13 +307,9 @@ export function VoiceSettings(): React.JSX.Element {
               />
               <Text style={styles.hint}>
                 {draft.form.transport === 'auto'
-                  ? 'Let the browser or phone choose. Best unless your server only listens on one.'
+                  ? 'No transport in the URL: most browsers and phones then use UDP. Add a TCP entry too for networks that block UDP.'
                   : draft.form.transport === 'udp'
-                  ? draft.form.tls
-                    ? 'DTLS over UDP: few servers and clients support it.'
-                    : 'UDP: lowest latency, but some networks block it.'
-                  : draft.form.tls
-                  ? 'TLS over TCP: the most likely to get through strict networks.'
+                  ? 'UDP: lowest latency, but some networks block it.'
                   : 'TCP: for networks that block UDP.'}
               </Text>
               <TextInput
@@ -561,7 +557,6 @@ function makeStyles(theme: Theme) {
       gap: 8,
       minHeight: 22,
     },
-    switchRowTight: {flexDirection: 'row', alignItems: 'center', gap: 12},
     segmented: {
       flexDirection: 'row',
       gap: 4,
