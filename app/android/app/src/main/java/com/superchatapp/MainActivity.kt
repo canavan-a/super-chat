@@ -12,7 +12,10 @@ class MainActivity : ReactActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     // Always on, set before anything is drawn: blocks screenshots and screen
     // recording, and blanks the app's thumbnail in the recent-apps switcher.
-    window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+    // (Off only in a build made with -PallowScreenshots=true, for store screenshots.)
+    if (!BuildConfig.ALLOW_SCREENSHOTS) {
+      window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+    }
     super.onCreate(savedInstanceState)
   }
 

@@ -36,6 +36,7 @@ import {DEFAULT_SERVER, normalizeServer, QUICK_REACTIONS, settingsStore} from '.
 import {getMyAvatar, resetStore, setMyAvatar, useStore} from '../store';
 import {THEME_OPTIONS, Theme, useThemeSetting} from '../theme';
 import {VoiceSettings} from '../components/VoiceSettings';
+import {PrivacyLink} from '../privacy/PrivacyPolicy';
 import {isSideload} from '../distribution';
 import {InstallCard} from '../components/InstallCard';
 
@@ -689,14 +690,7 @@ export function SettingsScreen({
         </>
       )}
 
-      {onOpenPrivacy ? (
-        <>
-          <View style={styles.divider} />
-          <Pressable onPress={onOpenPrivacy} accessibilityRole="link">
-            <Text style={styles.hint}>Privacy policy</Text>
-          </Pressable>
-        </>
-      ) : null}
+      {onOpenPrivacy ? <PrivacyLink onPress={onOpenPrivacy} /> : null}
     </ScrollView>
     </View>
   );

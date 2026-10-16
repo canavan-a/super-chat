@@ -58,7 +58,11 @@ export function SpringyPull({
       new Promise(r => setTimeout(r, 600)),
     ]);
     busy.current = false;
-    springTo(0, () => !busy.current && setPhase('idle'));
+    springTo(0, () => {
+      if (busy.current) return;
+      pull.setValue(0); // settle exactly closed, whatever the animation reported
+      setPhase('idle');
+    });
   };
 
   const responder = useMemo(
@@ -117,12 +121,18 @@ export function SpringyPull({
       {phase === 'refreshing' && (
         // In the gap above the list, fading out as it closes.
         <Animated.View
+          key="busy"
           pointerEvents="none"
           style={[styles.busy, {opacity: pull.interpolate({inputRange: [0, HOLD], outputRange: [0, 1], extrapolate: 'clamp'})}]}>
           <TypingDots color={theme.primary} size={6} />
         </Animated.View>
       )}
-      <Animated.View style={[styles.fill, {transform: [{translateY: pull}]}]}>{children}</Animated.View>
+      {/* Keyed: without it, adding the dots before it while refreshing made
+          React remount the list's container mid-animation, which then kept
+          the held gap open for good. */}
+      <Animated.View key="list" style={[styles.fill, {transform: [{translateY: pull}]}]}>
+        {children}
+      </Animated.View>
     </View>
   );
 }

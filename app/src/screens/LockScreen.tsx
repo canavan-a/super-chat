@@ -6,7 +6,7 @@ import {loadIdentity, NEEDS_PASSPHRASE} from '../keystore';
 import {splashHold} from '../logo/splashHold';
 import {LogoArt} from '../logo/LogoArt';
 import {useTheme} from '../theme';
-import {PrivacyPolicy} from '../privacy/PrivacyPolicy';
+import {PrivacyLink, PrivacyPolicy} from '../privacy/PrivacyPolicy';
 import {makeStyles, PassphraseForm} from './OnboardingScreen';
 
 /** Longest a fingerprint/PIN unlock may take before the screen gives up on it. */
@@ -175,9 +175,7 @@ export function LockScreen({
       <Pressable style={styles.secondary} onPress={onForget}>
         <Text style={styles.secondaryText}>Use a different account…</Text>
       </Pressable>
-      <Pressable style={styles.secondary} onPress={() => setPrivacy(true)} accessibilityRole="link">
-        <Text style={styles.backText}>Privacy policy</Text>
-      </Pressable>
+      <PrivacyLink onPress={() => setPrivacy(true)} />
     </ScrollView>
   );
 }

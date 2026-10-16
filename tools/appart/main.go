@@ -180,6 +180,7 @@ func main() {
 	artDir := flag.String("art", "../art", "the art directory")
 	app := flag.String("app", "../app", "the app directory")
 	preview := flag.String("preview", "", "also render PNG previews into this directory")
+	market := flag.String("marketplace", "", "also render the Google Play store icon and feature graphic into this directory")
 	flag.Parse()
 
 	mark, _, err := readArt(filepath.Join(*artDir, "mark.txt"))
@@ -216,6 +217,9 @@ func main() {
 	must(writePalette(filepath.Join(*app, "src/logo/iconPalette.json"), pals, icon))
 	must(writeAndroid(filepath.Join(*app, "android/app/src/main/res"), pals, icon))
 	must(writeWeb(filepath.Join(*app, "public"), pals["dark"], mark, word, icon))
+	if *market != "" {
+		must(writeMarketplace(*market, pals["dark"], line, icon))
+	}
 	if *preview != "" {
 		must(writePreviews(*preview, pals, mark, word, icon))
 	}

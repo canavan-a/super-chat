@@ -108,3 +108,39 @@ func renderSplash(p Palette, mark, word Grid, w, h int) *image.NRGBA {
 	fill(word, len(mark)+gap)
 	return img
 }
+
+// writeMarketplace renders Google Play's store graphics: the 512x512 app
+// icon (a full square, which Play rounds itself) and the 1024x500 feature
+// graphic (the one-line wordmark alone on the dark theme's background).
+func writeMarketplace(dir string, p Palette, line, icon Grid) error {
+	if err := writePNG(filepath.Join(dir, "icon-512.png"), renderIcon(p, icon, 512, false, iconWidth(icon), 0)); err != nil {
+		return err
+	}
+	return writePNG(filepath.Join(dir, "feature-graphic-1024x500.png"), renderBanner(p, line, 1024, 500))
+}
+
+// renderBanner draws a wordmark centered on the theme's background, 60% of
+// the width (or less, if that would be too tall); cells are 3:4 like the art's.
+func renderBanner(p Palette, g Grid, w, h int) *image.NRGBA {
+	img := image.NewNRGBA(image.Rect(0, 0, w, h))
+	bg := p.Bg
+	draw.Draw(img, img.Bounds(), &image.Uniform{color.NRGBA{clamp(bg[0]), clamp(bg[1]), clamp(bg[2]), 255}}, image.Point{}, draw.Src)
+	cw := math.Min(0.6*float64(w)/float64(g.w()), 0.5*float64(h)/(float64(len(g))*pixAspect))
+	ch := cw * pixAspect
+	x0 := (float64(w) - cw*float64(g.w())) / 2
+	y0 := (float64(h) - ch*float64(len(g))) / 2
+	for y, row := range g {
+		for x := range len(row) {
+			if row[x] == '.' {
+				continue
+			}
+			c := p.color(legend[row[x]])
+			r := image.Rect(
+				int(math.Round(x0+float64(x)*cw)), int(math.Round(y0+float64(y)*ch)),
+				int(math.Round(x0+float64(x+1)*cw)), int(math.Round(y0+float64(y+1)*ch)),
+			)
+			draw.Draw(img, r, &image.Uniform{color.NRGBA{clamp(c[0]), clamp(c[1]), clamp(c[2]), 255}}, image.Point{}, draw.Src)
+		}
+	}
+	return img
+}

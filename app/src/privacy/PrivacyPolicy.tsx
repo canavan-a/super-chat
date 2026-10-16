@@ -137,6 +137,31 @@ export function PrivacyPolicy({
   );
 }
 
+/** The quiet "Privacy policy" link at the bottom of a screen: small, muted, no button around it. */
+export function PrivacyLink({
+  onPress,
+}: {
+  onPress: () => void;
+}): React.JSX.Element {
+  const theme = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={8}
+      accessibilityRole="link"
+      style={linkStyles.wrap}>
+      <Text style={[linkStyles.text, {color: theme.textMuted}]}>
+        Privacy policy
+      </Text>
+    </Pressable>
+  );
+}
+
+const linkStyles = StyleSheet.create({
+  wrap: {alignSelf: 'center', paddingVertical: 10, marginTop: 8},
+  text: {fontSize: 11, opacity: 0.6},
+});
+
 function makeStyles(theme: Theme) {
   return StyleSheet.create({
     fill: {flex: 1, backgroundColor: theme.bg},
