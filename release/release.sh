@@ -23,6 +23,7 @@ KEYSTORE_FILE="$SCRIPT_DIR/release.keystore"
 # Play build is `./gradlew bundlePlayRelease` instead (see README).
 APK_BUILT="$APP_ANDROID/app/build/outputs/apk/sideload/release/app-sideload-release.apk"
 TAG_PREFIX="app-v"
+STATE_FILE="$SCRIPT_DIR/sideload-version.env"
 
 bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
 info()  { printf '\033[36m%s\033[0m\n' "$*"; }
@@ -126,13 +127,29 @@ while :; do
 done
 
 versionName="${TAG#"$TAG_PREFIX"}"
+
+# The last versionCode built (sideload-version.env, gitignored): Android won't
+# install a lower one over a higher one, so the next is always above it.
+LAST_VERSION_CODE=""
+if [[ -f "$STATE_FILE" ]]; then
+	# shellcheck disable=SC1090
+	. "$STATE_FILE"
+fi
 suggest_code=$(( ${#TAGS[@]} + 1 ))
+if [[ "$LAST_VERSION_CODE" =~ ^[0-9]+$ ]] && (( LAST_VERSION_CODE >= suggest_code )); then
+	suggest_code=$((LAST_VERSION_CODE + 1))
+fi
 
 while :; do
 	read -r -p "versionCode [$suggest_code]: " versionCode
 	versionCode="${versionCode:-$suggest_code}"
-	[[ "$versionCode" =~ ^[0-9]+$ ]] && break
-	warn "versionCode must be an integer"
+	if [[ ! "$versionCode" =~ ^[0-9]+$ ]]; then
+		warn "versionCode must be an integer"; continue
+	fi
+	if [[ "$LAST_VERSION_CODE" =~ ^[0-9]+$ ]] && (( versionCode <= LAST_VERSION_CODE )); then
+		warn "versionCode must be higher than the last build ($LAST_VERSION_CODE), or it won't install over it"; continue
+	fi
+	break
 done
 
 # Signing cert fingerprint for the summary (best effort).
@@ -185,6 +202,14 @@ bold "==> Artifact"
 APK_OUT="$SCRIPT_DIR/superchat-$TAG.apk"
 cp "$APK_BUILT" "$APK_OUT"
 info "copied to $APK_OUT ($(du -h "$APK_OUT" | cut -f1))"
+
+# Remembered once built, published or not: a build that reached a phone
+# still counts.
+cat >"$STATE_FILE" <<EOF
+# Written by release.sh: the last sideload build. Gitignored.
+LAST_VERSION_NAME=$versionName
+LAST_VERSION_CODE=$versionCode
+EOF
 
 if command -v apksigner >/dev/null 2>&1; then
 	apksigner verify --print-certs "$APK_OUT" || warn "apksigner verify reported problems"

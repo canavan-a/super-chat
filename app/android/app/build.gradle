@@ -109,6 +109,13 @@ android {
         }
         play {
             dimension "distribution"
+            // ARM only. react-native-keychain 8 bundles Facebook Conceal,
+            // whose x86_64 library isn't 16 KB aligned, and Play rejects the
+            // bundle for it. Real phones are ARM; this drops x86 Chromebooks
+            // and emulators.
+            ndk {
+                abiFilters "arm64-v8a", "armeabi-v7a"
+            }
         }
     }
     signingConfigs {

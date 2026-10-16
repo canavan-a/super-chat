@@ -53,7 +53,11 @@ connection, which Play doesn't allow). Build the Play app bundle with:
 release/release-play.sh
 ```
 
-It suggests the next version from the last Play build (`play-version.env`,
+`release.sh` does the same for the sideload APK: the last versionCode built is
+kept in `sideload-version.env` (gitignored), the next one suggested above it,
+and anything lower refused.
+
+`release-play.sh` suggests the next version from the last Play build (`play-version.env`,
 with every build logged in `play-releases.log`; both gitignored), builds and
 signs `superchat-play-<version>.aab` here, and only records the version once
 the build worked. Play's versionCodes start at 100, above the sideload
