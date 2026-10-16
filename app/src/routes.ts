@@ -9,4 +9,5 @@ export type Route =
   | {name: 'newRoom'}
   | {name: 'join'; link?: string}
   | {name: 'settings'}
-  | {name: 'voice'; key: string};
+  | {name: 'voice'; key: string}
+  | {name: 'privacy'};

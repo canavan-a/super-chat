@@ -6,6 +6,7 @@ import {loadIdentity, NEEDS_PASSPHRASE} from '../keystore';
 import {splashHold} from '../logo/splashHold';
 import {LogoArt} from '../logo/LogoArt';
 import {useTheme} from '../theme';
+import {PrivacyPolicy} from '../privacy/PrivacyPolicy';
 import {makeStyles, PassphraseForm} from './OnboardingScreen';
 
 /** Longest a fingerprint/PIN unlock may take before the screen gives up on it. */
@@ -46,6 +47,7 @@ export function LockScreen({
   // Unlocked: the app is getting the rooms ready. A spinner, not the Unlock
   // button again (which looked like the unlock had missed or hung).
   const [opening, setOpening] = useState(false);
+  const [privacy, setPrivacy] = useState(false);
 
   // Each attempt's number: a late answer from an attempt that already timed
   // out may still unlock, but mustn't overwrite a newer attempt's state.
@@ -136,6 +138,8 @@ export function LockScreen({
     };
   }, [unlock]);
 
+  if (privacy) return <PrivacyPolicy onClose={() => setPrivacy(false)} />;
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
       <View style={styles.center}>
@@ -170,6 +174,9 @@ export function LockScreen({
       {error && <Text style={styles.error}>{error}</Text>}
       <Pressable style={styles.secondary} onPress={onForget}>
         <Text style={styles.secondaryText}>Use a different account…</Text>
+      </Pressable>
+      <Pressable style={styles.secondary} onPress={() => setPrivacy(true)} accessibilityRole="link">
+        <Text style={styles.backText}>Privacy policy</Text>
       </Pressable>
     </ScrollView>
   );

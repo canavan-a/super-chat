@@ -70,7 +70,13 @@ function withTimeout<T>(p: Promise<T>, what: string): Promise<T> {
     );
   });
 }
-export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
+export function SettingsScreen({
+  onForgotten,
+  onOpenPrivacy,
+}: {
+  onForgotten: () => void;
+  onOpenPrivacy?: () => void;
+}): React.JSX.Element {
   const {theme, themeName, setThemeName} = useThemeSetting();
   const styles = makeStyles(theme);
   const [tab, setTab] = useState<SettingsTab>('general');
@@ -682,6 +688,15 @@ export function SettingsScreen({onForgotten}: {onForgotten: () => void}): React.
           </Pressable>
         </>
       )}
+
+      {onOpenPrivacy ? (
+        <>
+          <View style={styles.divider} />
+          <Pressable onPress={onOpenPrivacy} accessibilityRole="link">
+            <Text style={styles.hint}>Privacy policy</Text>
+          </Pressable>
+        </>
+      ) : null}
     </ScrollView>
     </View>
   );

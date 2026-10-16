@@ -44,6 +44,7 @@ import {OnboardingScreen} from './screens/OnboardingScreen';
 import {RoomScreen} from './screens/RoomScreen';
 import {RoomSettingsScreen} from './screens/RoomSettingsScreen';
 import {SettingsScreen} from './screens/SettingsScreen';
+import {PrivacyPolicy} from './privacy/PrivacyPolicy';
 import {VoiceScreen} from './screens/VoiceScreen';
 import {VoiceBar} from './components/VoiceBar';
 import {session} from './session';
@@ -59,6 +60,7 @@ const TITLES: Record<Route['name'], string> = {
   join: 'Join a room',
   settings: 'Settings',
   voice: 'Voice',
+  privacy: 'Privacy policy',
 };
 
 // Screens report their own title/subtitle/actions up here so they render in
@@ -175,6 +177,7 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
 
   const goBack = useCallback(() => {
     if (route.name === 'roomSettings' || route.name === 'voice') navigate({name: 'room', key: route.key});
+    else if (route.name === 'privacy') navigate({name: 'settings'});
     else navigate({name: 'home'});
   }, [route, navigate]);
 
@@ -470,7 +473,10 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
           )}
           {route.name === 'newRoom' && <NewRoomScreen onNavigate={navigate} />}
           {route.name === 'join' && <JoinScreen key={route.link ?? ''} link={route.link} onNavigate={navigate} />}
-          {route.name === 'settings' && <SettingsScreen onForgotten={onForgotten} />}
+          {route.name === 'settings' && (
+            <SettingsScreen onForgotten={onForgotten} onOpenPrivacy={() => navigate({name: 'privacy'})} />
+          )}
+          {route.name === 'privacy' && <PrivacyPolicy />}
           {route.name === 'voice' && (
             <VoiceScreen key={route.key} roomKey={route.key} onNavigate={navigate} onHeaderChange={setHeaderInfo} />
           )}
