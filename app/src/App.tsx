@@ -7,7 +7,6 @@ import {
   BackHandler,
   Dimensions,
   Keyboard,
-  KeyboardAvoidingView,
   Linking,
   PanResponder,
   Platform,
@@ -384,13 +383,15 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
         </View>
       )}
 
-      <View
-        style={[
-          styles.header,
-          showingRoomHeader && headerInfo!.accentColor ? {borderLeftWidth: 4, borderLeftColor: headerInfo!.accentColor} : null,
-        ]}>
+      <View style={[styles.header, showingRoomHeader && headerInfo!.accentColor ? styles.headerAccented : null]}>
         {/* The constellation carries on up through the header. */}
         <PixelField />
+        {showingRoomHeader && headerInfo!.accentColor ? (
+          // The room's color, as a bar on the left edge. Its own view, not a
+          // border: React Native 0.81's Android border drawing covered a lone
+          // left border with a background-colored block.
+          <View pointerEvents="none" style={[styles.headerAccent, {backgroundColor: headerInfo!.accentColor}]} />
+        ) : null}
         {route.name !== 'home' && (
           <Pressable style={styles.headerBack} onPress={goBack} accessibilityLabel="Back" hitSlop={8}>
             <Icon name="chevron-left" size={22} color={theme.text} />
@@ -505,6 +506,9 @@ function makeStyles(theme: Theme) {
       borderBottomWidth: 1,
       borderBottomColor: theme.border,
     },
+    // Room accent bar: 4dp, with the content moved right to make room.
+    headerAccented: {paddingLeft: 16},
+    headerAccent: {position: 'absolute', left: 0, top: 0, bottom: 0, width: 4},
     headerBack: {width: 36, height: 36, alignItems: 'center', justifyContent: 'center', marginRight: 4, marginLeft: -6},
     headerAvatar: {marginRight: 10},
     headerTextArea: {flex: 1, minWidth: 0, borderRadius: 6},
@@ -560,33 +564,41 @@ function ThemeChrome(): null {
 function SystemBars({children}: {children: React.ReactNode}): React.JSX.Element {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
-  const [keyboard, setKeyboard] = useState(false);
+  // How much of the screen the keyboard covers while it's up (0 when it's
+  // down): from its top edge to the bottom of the screen. Not
+  // endCoordinates.height, which React Native reports without the
+  // navigation bar under the keyboard, so the message box sat half behind it.
+  const [keyboard, setKeyboard] = useState(0);
   useEffect(() => {
     if (Platform.OS !== 'android') return;
-    const show = Keyboard.addListener('keyboardDidShow', () => setKeyboard(true));
-    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboard(false));
+    const show = Keyboard.addListener('keyboardDidShow', e => {
+      const covered = Dimensions.get('screen').height - e.endCoordinates.screenY;
+      setKeyboard(covered > 0 ? covered : e.endCoordinates.height + insets.bottom);
+    });
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboard(0));
     return () => {
       show.remove();
       hide.remove();
     };
-  }, []);
+  }, [insets.bottom]);
   if (Platform.OS !== 'android') return <>{children}</>;
   return (
-    <KeyboardAvoidingView style={[styles.fillBox, {backgroundColor: theme.bg}]} behavior="padding">
-      <View
-        style={[
-          styles.fillBox,
-          {
-            paddingTop: insets.top,
-            // The keyboard covers the navigation bar, so no inset under it then.
-            paddingBottom: keyboard ? 0 : insets.bottom,
-            paddingLeft: insets.left,
-            paddingRight: insets.right,
-          },
-        ]}>
-        {children}
-      </View>
-    </KeyboardAvoidingView>
+    <View
+      style={[
+        styles.fillBox,
+        {
+          backgroundColor: theme.bg,
+          paddingTop: insets.top,
+          // Clear of the keyboard while it's up (it covers the navigation
+          // bar), else of the navigation bar. Not KeyboardAvoidingView: it
+          // added padding with no keyboard up.
+          paddingBottom: keyboard || insets.bottom,
+          paddingLeft: insets.left,
+          paddingRight: insets.right,
+        },
+      ]}>
+      {children}
+    </View>
   );
 }
 

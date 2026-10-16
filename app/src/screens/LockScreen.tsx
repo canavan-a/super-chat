@@ -116,9 +116,22 @@ export function LockScreen({
     };
     if (AppState.currentState === 'active') ask();
     const sub = AppState.addEventListener('change', st => st === 'active' && ask());
+    // At launch React Native can report a non-active state and then switch
+    // to active without a change event, so look again for a few seconds.
+    const poll = setInterval(() => {
+      if (AppState.currentState === 'active') ask();
+    }, 250);
+    // Never leave the splash covering the lock screen: if no prompt has
+    // been asked for by now, show the Unlock button.
+    const uncover = setTimeout(() => {
+      clearInterval(poll);
+      if (!asked) splashHold.release();
+    }, 3000);
     return () => {
       alive = false;
       if (delay) clearTimeout(delay);
+      clearInterval(poll);
+      clearTimeout(uncover);
       sub.remove();
     };
   }, [unlock]);
