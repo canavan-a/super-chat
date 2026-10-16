@@ -1,0 +1,179 @@
+# Store builds: pushing a tag like store-v0.4.0 builds, side by side,
+#  play  the signed Google Play bundle (.aab), uploaded to Play by hand
+#  ios   an unsigned iOS app (.ipa); signing comes once the Apple developer
+#        account is set up
+# and attaches both to a GitHub Release for that tag. The sideload APK keeps
+# its own release (release/release.sh, app-v* tags).
+#
+# Versions come from the tag: versionName / CFBundleShortVersionString is
+# "0.4.0", and the build number (versionCode / CFBundleVersion) is
+# major*10000 + minor*100 + patch, so it always goes up with the version
+# (0.1.3 was Play's 103). Minor and patch stay below 100.
+#
+# Repo secrets for the Play job (the values in release/keystore.env):
+#  SUPERCHAT_KEYSTORE_BASE64    base64 -w0 release/release.keystore
+#  SUPERCHAT_KEYSTORE_PASSWORD
+#  SUPERCHAT_KEY_ALIAS
+#  SUPERCHAT_KEY_PASSWORD
+
+name: Store builds
+
+on:
+  push:
+    tags: ['store-v*']
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      name: ${{ steps.v.outputs.name }}
+      code: ${{ steps.v.outputs.code }}
+    steps:
+      - id: v
+        run: |
+          v="${GITHUB_REF_NAME#store-v}"
+          if [[ ! "$v" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::the tag must look like store-v1.2.3"; exit 1
+          fi
+          major=$((10#${BASH_REMATCH[1]})) minor=$((10#${BASH_REMATCH[2]})) patch=$((10#${BASH_REMATCH[3]}))
+          if (( minor > 99 || patch > 99 )); then
+            echo "::error::minor and patch must be below 100"; exit 1
+          fi
+          echo "name=$v" >>"$GITHUB_OUTPUT"
+          echo "code=$((major * 10000 + minor * 100 + patch))" >>"$GITHUB_OUTPUT"
+
+  play:
+    needs: version
+    runs-on: ubuntu-latest
+    env:
+      VERSION_NAME: ${{ needs.version.outputs.name }}
+      VERSION_CODE: ${{ needs.version.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install
+        working-directory: app
+        run: npm ci
+
+      # Without these the build would quietly fall back to the debug key
+      # (android/app/build.gradle), which Play rejects.
+      - name: Signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SUPERCHAT_KEYSTORE_BASE64 }}
+        run: |
+          if [[ -z "$KEYSTORE_BASE64" ]]; then
+            echo "::error::the SUPERCHAT_KEYSTORE_BASE64 secret is not set"; exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d >"$RUNNER_TEMP/release.keystore"
+          echo "SUPERCHAT_KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >>"$GITHUB_ENV"
+
+      - name: Build
+        working-directory: app/android
+        env:
+          SUPERCHAT_KEYSTORE_PASSWORD: ${{ secrets.SUPERCHAT_KEYSTORE_PASSWORD }}
+          SUPERCHAT_KEY_ALIAS: ${{ secrets.SUPERCHAT_KEY_ALIAS }}
+          SUPERCHAT_KEY_PASSWORD: ${{ secrets.SUPERCHAT_KEY_PASSWORD }}
+        run: |
+          ./gradlew --no-daemon bundlePlayRelease \
+            -PversionName="$VERSION_NAME" -PversionCode="$VERSION_CODE"
+          mkdir -p "$RUNNER_TEMP/out"
+          cp app/build/outputs/bundle/playRelease/app-play-release.aab \
+            "$RUNNER_TEMP/out/superchat-play-$VERSION_NAME.aab"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: play
+          path: ${{ runner.temp }}/out/*.aab
+          if-no-files-found: error
+
+  ios:
+    needs: version
+    runs-on: macos-15
+    env:
+      VERSION_NAME: ${{ needs.version.outputs.name }}
+      VERSION_CODE: ${{ needs.version.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install
+        working-directory: app
+        run: npm ci
+
+      - name: Pods
+        working-directory: app/ios
+        run: pod install
+
+      # Set on the app's own project only: passed to xcodebuild, they'd
+      # override every pod's version too.
+      - name: Version
+        working-directory: app/ios
+        run: |
+          sed -i '' \
+            -e "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $VERSION_NAME;/" \
+            -e "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $VERSION_CODE;/" \
+            SuperchatApp.xcodeproj/project.pbxproj
+
+      - name: Build
+        working-directory: app/ios
+        run: |
+          xcodebuild archive -quiet \
+            -workspace SuperchatApp.xcworkspace \
+            -scheme SuperchatApp \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/SuperchatApp.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+          # An .ipa is the app in a Payload folder, zipped.
+          mkdir -p "$RUNNER_TEMP/ipa/Payload" "$RUNNER_TEMP/out"
+          cp -R "$RUNNER_TEMP/SuperchatApp.xcarchive/Products/Applications/SuperchatApp.app" "$RUNNER_TEMP/ipa/Payload/"
+          (cd "$RUNNER_TEMP/ipa" && zip -qry "$RUNNER_TEMP/out/superchat-ios-$VERSION_NAME-unsigned.ipa" Payload)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios
+          path: ${{ runner.temp }}/out/*.ipa
+          if-no-files-found: error
+
+  # Attaches whatever was built, so one platform failing doesn't hold back
+  # the other. Re-running a failed job uploads its file to the same release.
+  release:
+    needs: [version, play, ios]
+    if: ${{ !cancelled() && needs.version.result == 'success' && (needs.play.result == 'success' || needs.ios.result == 'success') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION_NAME: ${{ needs.version.outputs.name }}
+      VERSION_CODE: ${{ needs.version.outputs.code }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      # --latest=false: the sideload APK's release stays the repo's "Latest".
+      - run: |
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --latest=false \
+              --title "Store builds $VERSION_NAME ($VERSION_CODE)" \
+              --notes "Google Play bundle (upload it in the Play Console) and an unsigned iOS build. Build number $VERSION_CODE."
+          fi
+          gh release upload "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --clobber
