@@ -5,6 +5,11 @@ import {AppState, Pressable, ScrollView, Text} from 'react-native';
 import {Overlay} from '../src/components/Overlay';
 import {PortalOutlet, PortalProvider} from '../src/components/Portal';
 
+/** A button (Pressable): the outermost test node with an onPress handler. */
+const isButton = (n: renderer.ReactTestInstance) =>
+  typeof n.props.onPress === 'function' &&
+  typeof n.parent?.props?.onPress !== 'function';
+
 const mockLoad = jest.fn();
 jest.mock('../src/keystore', () => ({
   loadIdentity: (...a: unknown[]) => mockLoad(...a),
@@ -102,7 +107,7 @@ describe('fingerprint unlock', () => {
   const unlockButton = (tree: renderer.ReactTestRenderer) =>
     tree.root.findAll(
       n =>
-        n.type === Pressable &&
+        isButton(n) &&
         n.findAll(t => t.type === Text && t.props.children === 'Unlock')
           .length > 0,
     )[0];

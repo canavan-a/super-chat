@@ -4,6 +4,11 @@ import {Pressable, Text} from 'react-native';
 
 import {alreadyAdded, describeIce, sharedEntry} from '../src/call/iceShare';
 
+/** A button (Pressable): the outermost test node with an onPress handler. */
+const isButton = (n: renderer.ReactTestInstance) =>
+  typeof n.props.onPress === 'function' &&
+  typeof n.parent?.props?.onPress !== 'function';
+
 jest.mock('../src/call/testIce', () => ({testIceServer: jest.fn()}));
 jest.mock('../src/platformConfirm', () => ({
   platformConfirm: (_t: string, _m: string, _l: string, ok: () => void) => ok(),
@@ -96,7 +101,7 @@ describe('sharing and adding', () => {
     tree.root
       .findAll(
         n =>
-          n.type === Pressable &&
+          isButton(n) &&
           n.findAll(
             t =>
               t.type === Text &&

@@ -6,11 +6,12 @@ import {
   AppStateStatus,
   BackHandler,
   Dimensions,
+  Keyboard,
+  KeyboardAvoidingView,
   Linking,
   PanResponder,
   Platform,
   Pressable,
-  SafeAreaView,
   StatusBar,
   StyleSheet,
   Text,
@@ -23,6 +24,8 @@ import {RemoteAudio} from './call/RemoteAudio';
 import {voice} from './call/voice';
 import {applyUpdateIfSafe, setThemeColor, startPwa} from './pwa/pwa';
 import {ChatAvatar} from './components/ChatAvatar';
+import {SafeAreaProvider, useSafeAreaInsets} from 'react-native-safe-area-context';
+
 import {CrashScreen} from './components/CrashScreen';
 import {isSideload} from './distribution';
 import {PortalOutlet, PortalProvider} from './components/Portal';
@@ -372,7 +375,7 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
   const offline = activeKey ? !isServerOnline(getRoom(activeKey)?.server ?? '') : false;
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <StatusBar barStyle={theme.name === 'light' || theme.name === 'sepia' ? 'dark-content' : 'light-content'} />
 
       {offline && (
@@ -474,12 +477,13 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
       </View>
       {/* Modal sheets (Overlay modal), over everything. */}
       <PortalOutlet />
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   fill: {flex: 1, alignItems: 'center', justifyContent: 'center'},
+  fillBox: {flex: 1},
 });
 
 function makeStyles(theme: Theme) {
@@ -547,17 +551,60 @@ function ThemeChrome(): null {
   return null;
 }
 
+/**
+ * Android draws the app edge to edge (under the status and navigation bars;
+ * required when targeting API 35+), so keep everything clear of them with
+ * the real insets, and lift it above the keyboard (adjustResize no longer
+ * does that edge to edge). The web build does both in index.html.
+ */
+function SystemBars({children}: {children: React.ReactNode}): React.JSX.Element {
+  const theme = useTheme();
+  const insets = useSafeAreaInsets();
+  const [keyboard, setKeyboard] = useState(false);
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const show = Keyboard.addListener('keyboardDidShow', () => setKeyboard(true));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboard(false));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+  if (Platform.OS !== 'android') return <>{children}</>;
+  return (
+    <KeyboardAvoidingView style={[styles.fillBox, {backgroundColor: theme.bg}]} behavior="padding">
+      <View
+        style={[
+          styles.fillBox,
+          {
+            paddingTop: insets.top,
+            // The keyboard covers the navigation bar, so no inset under it then.
+            paddingBottom: keyboard ? 0 : insets.bottom,
+            paddingLeft: insets.left,
+            paddingRight: insets.right,
+          },
+        ]}>
+        {children}
+      </View>
+    </KeyboardAvoidingView>
+  );
+}
+
 function App(): React.JSX.Element {
   return (
     <CrashScreen>
-      <ThemeProvider>
-        <ThemeChrome />
-        <PortalProvider>
-          <SplashGate>
-            <AccountGate />
-          </SplashGate>
-        </PortalProvider>
-      </ThemeProvider>
+      <SafeAreaProvider>
+        <ThemeProvider>
+          <ThemeChrome />
+          <SystemBars>
+            <PortalProvider>
+              <SplashGate>
+                <AccountGate />
+              </SplashGate>
+            </PortalProvider>
+          </SystemBars>
+        </ThemeProvider>
+      </SafeAreaProvider>
     </CrashScreen>
   );
 }

@@ -23,9 +23,23 @@ jest.mock('../src/keystore', () => ({
   storeIdentity: async () => 'biometric',
 }));
 jest.mock('../src/logo/LogoArt', () => ({LogoArt: () => null}));
-jest.mock('react-native/Libraries/Utilities/BackHandler', () =>
-  require('react-native/Libraries/Utilities/__mocks__/BackHandler'),
-);
+// React Native 0.81 no longer ships a BackHandler mock: a minimal one with
+// mockPressBack(), which runs the newest listener like the hardware button.
+jest.mock('react-native/Libraries/Utilities/BackHandler', () => {
+  const listeners: (() => boolean)[] = [];
+  const BackHandler = {
+    addEventListener: (_: string, l: () => boolean) => {
+      listeners.push(l);
+      return {remove: () => listeners.splice(listeners.indexOf(l), 1)};
+    },
+    exitApp: jest.fn(),
+    mockPressBack: () => {
+      for (let i = listeners.length - 1; i >= 0; i--)
+        if (listeners[i]()) return;
+    },
+  };
+  return {__esModule: true, default: BackHandler};
+});
 
 const flush = () => act(async () => {});
 
@@ -43,14 +57,22 @@ function mount() {
 }
 
 const texts = (t: renderer.ReactTestRenderer) =>
-  t.root.findAll(n => typeof n.props.children === 'string' || Array.isArray(n.props.children))
-    .flatMap(n => (Array.isArray(n.props.children) ? n.props.children : [n.props.children]))
+  t.root
+    .findAll(
+      n =>
+        typeof n.props.children === 'string' || Array.isArray(n.props.children),
+    )
+    .flatMap(n =>
+      Array.isArray(n.props.children) ? n.props.children : [n.props.children],
+    )
     .filter(c => typeof c === 'string')
     .join(' | ');
 
 function press(t: renderer.ReactTestRenderer, label: string) {
   const target = t.root.find(
-    n => typeof n.props.onPress === 'function' && texts({root: n} as any).includes(label),
+    n =>
+      typeof n.props.onPress === 'function' &&
+      texts({root: n} as any).includes(label),
   );
   return act(async () => {
     await target.props.onPress();
@@ -127,7 +149,10 @@ describe('onboarding', () => {
 
   it('shows a wrong passphrase, then success, when importing a key file', async () => {
     const me = newIdentity();
-    picked.next = {name: 'superchat-key.json', text: await exportKeyFile(me, 'right one')};
+    picked.next = {
+      name: 'superchat-key.json',
+      text: await exportKeyFile(me, 'right one'),
+    };
     const {tree, onDone} = mount();
     await press(tree, 'Import a key file');
     expect(texts(tree)).toContain('Unlock key file');

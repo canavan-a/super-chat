@@ -70,7 +70,7 @@ def enableProguardInReleaseBuilds = false
  * give correct results when using with locales other than en-US. Note that
  * this variant is about 6MiB larger per architecture than default.
  */
-def jscFlavor = 'org.webkit:android-jsc:+'
+def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
 android {
     ndkVersion rootProject.ext.ndkVersion
@@ -98,6 +98,10 @@ android {
     productFlavors {
         sideload {
             dimension "distribution"
+            // Android 15+ caps dataSync foreground services at ~6 h a day for
+            // apps targeting 35+, which would cut off the always-on
+            // notification connection. Play (36) doesn't use one.
+            targetSdkVersion 34
         }
         play {
             dimension "distribution"

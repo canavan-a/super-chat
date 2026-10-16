@@ -2,7 +2,7 @@
 // app's cache (so a content:// URI can be read), read into memory, and the
 // copy is deleted straight away: nothing decrypted or about to be encrypted
 // is left lying on disk.
-import DocumentPicker from 'react-native-document-picker';
+import {errorCodes, isErrorWithCode, keepLocalCopy, pick, types} from '@react-native-documents/picker';
 import {launchImageLibrary} from 'react-native-image-picker';
 import RNFS from 'react-native-fs';
 import {NativeModules} from 'react-native';
@@ -31,17 +31,37 @@ export interface TextFile {
   text: string;
 }
 
+const isCancel = (e: unknown) => isErrorWithCode(e) && e.code === errorCodes.OPERATION_CANCELED;
+
+/**
+ * Copies picked documents into the app's cache (the picker hands back
+ * content:// URIs), returning the local file path of each, or null where the
+ * copy failed.
+ */
+async function localCopies(files: {uri: string; name: string | null}[]): Promise<(string | null)[]> {
+  if (!files.length) return [];
+  const res = await keepLocalCopy({
+    files: files.map(f => ({uri: f.uri, fileName: f.name ?? 'file'})) as [
+      {uri: string; fileName: string},
+      ...{uri: string; fileName: string}[],
+    ],
+    destination: 'cachesDirectory',
+  });
+  return res.map(r => (r.status === 'success' ? decodeURI(r.localUri.replace('file://', '')) : null));
+}
+
 /** Null if the picker was cancelled. Throws with a readable message. */
 export async function pickTextFile(): Promise<TextFile | null> {
   let f;
   try {
-    [f] = await DocumentPicker.pick({type: [DocumentPicker.types.allFiles], copyTo: 'cachesDirectory'});
+    [f] = await pick({type: [types.allFiles]});
   } catch (e) {
-    if (DocumentPicker.isCancel(e)) return null;
+    if (isCancel(e)) return null;
     throw new Error("Couldn't open the file picker.");
   }
-  if (!f.fileCopyUri) throw new Error(`Couldn't read ${f.name ?? 'that file'}.`);
-  const bytes = await readAndDelete(decodeURI(f.fileCopyUri.replace('file://', '')));
+  const [path] = await localCopies([f]);
+  if (!path) throw new Error(`Couldn't read ${f.name ?? 'that file'}.`);
+  const bytes = await readAndDelete(path);
   if (bytes.length > 64 * 1024) throw new Error(`${f.name ?? 'That file'} is too big to be a key file.`);
   return {name: f.name ?? 'key file', text: unutf8(bytes)};
 }
@@ -153,19 +173,21 @@ export async function pickImages(): Promise<PickedFile[]> {
 
 export async function pickFiles(): Promise<PickedFile[]> {
   try {
-    const picked = await DocumentPicker.pick({allowMultiSelection: true, copyTo: 'cachesDirectory'});
+    const picked = await pick({allowMultiSelection: true});
+    const paths = await localCopies(picked);
     const out: PickedFile[] = [];
-    for (const f of picked) {
-      if (!f.fileCopyUri) continue;
+    for (let i = 0; i < picked.length; i++) {
+      const path = paths[i];
+      if (!path) continue;
       out.push({
-        name: f.name ?? 'file',
-        mime: f.type ?? 'application/octet-stream',
-        data: await readAndDelete(decodeURI(f.fileCopyUri.replace('file://', ''))),
+        name: picked[i].name ?? 'file',
+        mime: picked[i].type ?? 'application/octet-stream',
+        data: await readAndDelete(path),
       });
     }
     return out;
   } catch (e) {
-    if (DocumentPicker.isCancel(e)) return [];
+    if (isCancel(e)) return [];
     throw e;
   }
 }

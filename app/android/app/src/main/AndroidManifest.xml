@@ -27,7 +27,11 @@
       android:roundIcon="@mipmap/ic_launcher_dark_round"
       android:allowBackup="false"
       android:theme="@style/AppTheme"
-      android:supportsRtl="true">
+      android:supportsRtl="true"
+      android:enableOnBackInvokedCallback="false">
+      <!-- enableOnBackInvokedCallback=false: Android 16 (API 36) turns on
+           predictive back by default, which skips the app's own back handling
+           (BackHandler in App.tsx, Overlay.tsx, OnboardingScreen.tsx). -->
 
       <activity
         android:name=".MainActivity"

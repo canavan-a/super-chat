@@ -14,7 +14,7 @@ import {ThemeProvider, THEMES} from '../src/theme';
 
 // The native animated module doesn't exist under Jest; without this the
 // animations fall back noisily instead of running on the JS driver.
-jest.mock('react-native/Libraries/Animated/NativeAnimatedHelper');
+jest.mock('react-native/src/private/animated/NativeAnimatedHelper');
 
 const text = (node: renderer.ReactTestInstance): string => JSON.stringify(node.props.style ?? '');
 

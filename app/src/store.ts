@@ -627,10 +627,14 @@ export async function catchUp(key: string): Promise<void> {
     ? await api.messages(r.server, r.id, r.me, {after: newest.pos, limit: 50})
     : await api.messages(r.server, r.id, r.me, {limit: 5});
   for (const sm of page) {
-    if (r.messages.some(m => m.id === sm.id)) continue;
-    if (!r.keys[sm.epoch]) await loadKeys(r);
-    const dm = decrypt(r, sm);
-    ingest(r, dm);
+    // The reconnect above resyncs, which may store this message first
+    // (without notifying): announce it either way; announce() dedups.
+    let dm = r.messages.find(m => m.id === sm.id);
+    if (!dm) {
+      if (!r.keys[sm.epoch]) await loadKeys(r);
+      dm = decrypt(r, sm);
+      ingest(r, dm);
+    }
     const c = dm.content;
     const isLine = c?.t === 'text' || c?.t === 'file' || c?.t === 'ice' || !c;
     if (isLine && sm.sender !== r.me.id) announce(r, dm);

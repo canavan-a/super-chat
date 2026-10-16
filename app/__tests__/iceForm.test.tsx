@@ -10,6 +10,11 @@ import {
   type IceForm,
 } from '../src/call/iceConfig';
 
+/** A button (Pressable): the outermost test node with an onPress handler. */
+const isButton = (n: renderer.ReactTestInstance) =>
+  typeof n.props.onPress === 'function' &&
+  typeof n.parent?.props?.onPress !== 'function';
+
 jest.mock('../src/call/testIce', () => ({testIceServer: jest.fn()}));
 
 const form = (o: Partial<IceForm>): IceForm => ({...EMPTY_ICE_FORM, ...o});
@@ -137,7 +142,7 @@ describe('Settings → Voice: add server', () => {
   const press = (tree: renderer.ReactTestRenderer, label: string) => {
     const btn = tree.root.findAll(
       n =>
-        n.type === Pressable &&
+        isButton(n) &&
         n.findAll(t => t.type === Text && t.props.children === label).length >
           0,
     )[0];
