@@ -8,6 +8,8 @@ import {TypingDots} from './TypingDots';
 const TRIGGER = 70;
 /** The dots stop after this even if the refresh is still going. */
 const MAX_SPIN_MS = 2500;
+/** The gap the list holds open, with the dots in it, while refreshing. */
+const HOLD = 56;
 
 /** Rubber-band resistance: follows the finger at first, then less and less. */
 const rubber = (dy: number) => 140 * (1 - Math.exp(-Math.max(0, dy) / 200));
@@ -16,9 +18,8 @@ const rubber = (dy: number) => 140 * (1 - Math.exp(-Math.max(0, dy) / 200));
  * A springy pull-to-refresh around a scrollable list. Pulled down from the
  * top, the list follows the finger with rubber-band resistance while the
  * app's three pixel dots grow in above it; let go past the line and it
- * springs straight back while `onRefresh` runs behind it, shown only by a
- * small bouncing-dots pill at the top that touches pass through. No text,
- * and nothing is blocked. `atTop` says whether the list is scrolled to its
+ * springs back to a small gap that holds the bouncing dots while
+ * `onRefresh` runs, then closes. No text, and the list stays usable. `atTop` says whether the list is scrolled to its
  * top (the pull only starts there).
  */
 export function SpringyPull({
@@ -42,12 +43,12 @@ export function SpringyPull({
   const springTo = (to: number, done?: () => void) =>
     Animated.spring(pull, {toValue: to, useNativeDriver: useNative, tension: 120, friction: to === 0 ? 7 : 9}).start(done);
 
-  // The list springs straight back on release and stays usable; the refresh
-  // runs behind it, shown only by the small dots overlay at the top.
+  // On release the list springs back to a gap holding the bouncing dots,
+  // stays usable, and closes once the refresh is done.
   const refresh = async () => {
     busy.current = true;
     setPhase('refreshing');
-    springTo(0);
+    springTo(HOLD);
     // A beat of bounce even when the refresh is instant, so it reads; and
     // never more than a couple of seconds: whatever is still loading after
     // that lands quietly on its own.
@@ -57,7 +58,7 @@ export function SpringyPull({
       new Promise(r => setTimeout(r, 600)),
     ]);
     busy.current = false;
-    setPhase('idle');
+    springTo(0, () => !busy.current && setPhase('idle'));
   };
 
   const responder = useMemo(
@@ -80,9 +81,11 @@ export function SpringyPull({
         },
         onPanResponderRelease: (_e, g) => {
           if (!busy.current && rubber(g.dy) >= TRIGGER) refresh();
+          else if (busy.current) springTo(HOLD); // still refreshing: keep the gap
           else springTo(0, () => !busy.current && setPhase('idle'));
         },
-        onPanResponderTerminate: () => springTo(0, () => !busy.current && setPhase('idle')),
+        onPanResponderTerminate: () =>
+          busy.current ? springTo(HOLD) : springTo(0, () => !busy.current && setPhase('idle')),
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -97,7 +100,8 @@ export function SpringyPull({
         style={[
           styles.indicator,
           {
-            opacity: progress,
+            // While refreshing, the bouncing dots below take its place.
+            opacity: phase === 'refreshing' ? 0 : progress,
             transform: [
               {translateY: pull.interpolate({inputRange: [0, 140], outputRange: [-24, 46], extrapolate: 'clamp'})},
               {scale: progress.interpolate({inputRange: [0, 1], outputRange: [0.6, 1]})},
@@ -110,15 +114,15 @@ export function SpringyPull({
           ))}
         </View>
       </Animated.View>
-      <Animated.View style={[styles.fill, {transform: [{translateY: pull}]}]}>{children}</Animated.View>
       {phase === 'refreshing' && (
-        // Over the list, out of the way of touches: only the bouncing dots.
-        <View pointerEvents="none" style={styles.busy}>
-          <View style={[styles.busyPill, {backgroundColor: theme.surface, borderColor: theme.border}]}>
-            <TypingDots color={theme.primary} size={6} />
-          </View>
-        </View>
+        // In the gap above the list, fading out as it closes.
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.busy, {opacity: pull.interpolate({inputRange: [0, HOLD], outputRange: [0, 1], extrapolate: 'clamp'})}]}>
+          <TypingDots color={theme.primary} size={6} />
+        </Animated.View>
       )}
+      <Animated.View style={[styles.fill, {transform: [{translateY: pull}]}]}>{children}</Animated.View>
     </View>
   );
 }
@@ -128,6 +132,5 @@ const styles = StyleSheet.create({
   indicator: {position: 'absolute', top: 0, left: 0, right: 0, alignItems: 'center', gap: 6},
   dots: {flexDirection: 'row', gap: 4},
   dot: {width: 7, height: 7},
-  busy: {position: 'absolute', top: 8, left: 0, right: 0, alignItems: 'center'},
-  busyPill: {paddingHorizontal: 12, paddingVertical: 7, borderRadius: 14, borderWidth: 1},
+  busy: {position: 'absolute', top: 0, left: 0, right: 0, height: HOLD, alignItems: 'center', justifyContent: 'center'},
 });
