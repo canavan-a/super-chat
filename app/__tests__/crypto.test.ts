@@ -192,6 +192,18 @@ describe('room log', () => {
     const view = roomView(after, {1: k1, 2: k2});
     expect(view.invites[0].joined).toEqual([bob.id]);
     expect(view.members.find(m => m.id === bob.id)?.name).toBe('Bob');
+
+    // Joins and departures, for the notices in the chat; Bob's name is still
+    // known once he's gone.
+    const left = buildEvents(bob, after.state, [{kind: 'leave'}]);
+    const gone = replay(created.room, [...all, ...left.signed]);
+    const goneView = roomView(gone, {1: k1, 2: k2});
+    expect(goneView.activity.map(a => [a.kind, a.member])).toEqual([
+      ['join', bob.id],
+      ['leave', bob.id],
+    ]);
+    expect(new Set(goneView.activity.map(a => a.id)).size).toBe(2);
+    expect(goneView.names[bob.id]).toBe('Bob');
   });
 
   it('refuses a join signed with the wrong invite secret', () => {

@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 
 import type {HeaderInfo} from '../App';
-import {FileRef, fingerprint} from '../crypto';
+import {ActivityView, FileRef, fingerprint} from '../crypto';
 import {pickFiles, pickImages, PickedFile, saveFileAs} from '../files';
 import {openVoice} from '../call/actions';
 import {Avatar} from '../components/Avatar';
@@ -369,7 +369,31 @@ function ChatList({
   // bottom and stays anchored there as messages arrive, with no scrolling
   // to do. Offset 0 is the bottom; the "end" is the top, where older
   // messages load.
-  const newestFirst = useMemo(() => [...messages].reverse(), [messages]);
+  // Joins and departures from the room log go between the messages, but only
+  // over the stretch of history the messages cover: since we (last) joined,
+  // the latest wipe and the retention window, and while older messages are
+  // still to load, since the oldest one loaded. Earlier ones would sit above
+  // nothing.
+  const view = room.view;
+  const notices = useMemo(() => {
+    if (!view) return [];
+    let from = 0;
+    for (const a of view.activity) if (a.kind === 'join' && a.member === meId) from = a.at;
+    if (view.wiped) from = Math.max(from, view.wiped.at);
+    if (view.retentionDays) from = Math.max(from, Date.now() - view.retentionDays * DAY_MS);
+    if (room.hasMore) from = Math.max(from, messages[0]?.createdAt ?? Infinity);
+    return view.activity.filter(a => a.at >= from);
+  }, [view, meId, room.hasMore, messages]);
+  const newestFirst = useMemo(() => {
+    const items: ChatItem[] = [];
+    let i = 0;
+    for (const m of messages) {
+      while (i < notices.length && notices[i].at <= m.createdAt) items.push(notices[i++]);
+      items.push(m);
+    }
+    while (i < notices.length) items.push(notices[i++]);
+    return items.reverse();
+  }, [messages, notices]);
   const handleScroll = (e: any) => {
     const {contentOffset, layoutMeasurement} = e.nativeEvent;
     const far = contentOffset.y > layoutMeasurement.height * 1.5;
@@ -381,10 +405,14 @@ function ChatList({
     loadOlder(room.key).finally(() => (loadingOlderRef.current = false));
   };
 
-  const renderItem = ({item, index}: {item: ChatMessage; index: number}) => {
+  const renderItem = ({item, index}: {item: ChatItem; index: number}) => {
+    if (isNotice(item)) return <ActivityNotice activity={item} name={item.member === meId ? 'You' : nameOf(item.member)} styles={styles} />;
     // Inverted: the message before this one in time is the next in the list.
-    const prev = newestFirst[index + 1];
-    const next = newestFirst[index - 1];
+    // A notice in between breaks the group.
+    const before = newestFirst[index + 1];
+    const after = newestFirst[index - 1];
+    const prev = before && !isNotice(before) ? before : undefined;
+    const next = after && !isNotice(after) ? after : undefined;
     const mine = item.sender === meId;
     const grouped = !!prev && sameGroup(prev, item);
     const lastInGroup = !next || !sameGroup(item, next);
@@ -594,6 +622,22 @@ const GROUP_MS = 3 * 60_000;
 /** Two taps closer than this are a double-tap (which reacts). */
 const DOUBLE_TAP_MS = 280;
 const sameGroup = (a: ChatMessage, b: ChatMessage) => a.sender === b.sender && b.createdAt - a.createdAt < GROUP_MS;
+
+const DAY_MS = 24 * 60 * 60_000;
+
+/** A row in the chat: a message, or a join/leave notice between them. */
+type ChatItem = ChatMessage | ActivityView;
+const isNotice = (i: ChatItem): i is ActivityView => 'member' in i;
+
+function ActivityNotice({activity, name, styles}: {activity: ActivityView; name: string; styles: Styles}) {
+  const what = activity.kind === 'join' ? 'joined' : activity.kind === 'leave' ? 'left' : name === 'You' ? 'were removed' : 'was removed';
+  const time = new Date(activity.at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  return (
+    <Text style={styles.activityNotice}>
+      {name} {what} · {time}
+    </Text>
+  );
+}
 
 const MessageRow = React.memo(function MessageRow({
   msg,
@@ -916,6 +960,7 @@ function makeStyles(theme: Theme) {
       borderColor: theme.border,
     },
     startNoticeText: {flex: 1, fontSize: 12, color: theme.textMuted},
+    activityNotice: {alignSelf: 'center', marginVertical: 8, fontSize: 12, color: theme.textMuted},
     rowOuter: {flexDirection: 'row', alignItems: 'flex-end', gap: 6, marginTop: 10},
     rowOuterMine: {justifyContent: 'flex-end'},
     // Same sender within GROUP_MS: stack tightly, no repeated name or time.

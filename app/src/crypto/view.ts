@@ -36,6 +36,16 @@ export interface RoomView {
   avatars: Record<string, AvatarRef>;
   /** The latest "wipe chat history": who did it and when. Nothing older survives it. */
   wiped: {by: string; at: number} | null;
+  /** Who joined, left or was removed, and when, oldest first: notices in the chat. */
+  activity: ActivityView[];
+}
+
+export interface ActivityView {
+  /** Unique within the room: the event's place in the log. */
+  id: string;
+  kind: 'join' | 'leave' | 'removed';
+  member: string;
+  at: number;
 }
 
 /**
@@ -90,6 +100,7 @@ export function roomView(r: ReplayResult, keys: Record<number, Uint8Array>): Roo
   let wiped: {by: string; at: number} | null = null;
   const snapNames: Record<string, string> = {};
   const joined: Record<string, string[]> = {};
+  const activity: ActivityView[] = [];
 
   for (const e of r.events) {
     switch (e.kind) {
@@ -125,6 +136,13 @@ export function roomView(r: ReplayResult, keys: Record<number, Uint8Array>): Roo
       }
       case 'join':
         (joined[e.pub.invite] ??= []).push(e.author);
+        activity.push({id: `a${e.seq}`, kind: 'join', member: e.author, at: e.ts});
+        break;
+      case 'leave':
+        activity.push({id: `a${e.seq}`, kind: 'leave', member: e.author, at: e.ts});
+        break;
+      case 'kick':
+        activity.push({id: `a${e.seq}`, kind: 'removed', member: e.pub.target, at: e.ts});
         break;
       case 'wipe':
         wiped = {by: e.author, at: e.ts};
@@ -153,5 +171,6 @@ export function roomView(r: ReplayResult, keys: Record<number, Uint8Array>): Roo
     names: allNames,
     avatars,
     wiped,
+    activity,
   };
 }
