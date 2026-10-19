@@ -456,6 +456,10 @@ function ChatList({
         keyExtractor={m => m.id}
         renderItem={renderItem}
         contentContainerStyle={styles.chatContent}
+        // Bubbles take long-press and double-tap with the keyboard up;
+        // empty space or a scroll puts it away.
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         onScroll={handleScroll}
         scrollEventThrottle={32}
         onEndReached={loadEarlier}
@@ -786,7 +790,7 @@ const MessageRow = React.memo(function MessageRow({
               )}
             {c?.t === 'ice' ? <IceServerCard server={c.server} mine={mine} sharedBy={name} color={textColor} /> : null}
             {c && (c.t === 'text' || (c.t === 'file' && c.body)) ? (
-              <MarkdownText text={c.t === 'text' ? c.body : c.body!} color={textColor} theme={theme} />
+              <MarkdownText text={c.t === 'text' ? c.body : c.body!} color={textColor} theme={theme} onLinkLongPress={onLongPress} />
             ) : null}
           </Pressable>
           {entries.length > 0 && (

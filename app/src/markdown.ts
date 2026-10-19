@@ -26,6 +26,8 @@ export interface InlineRun {
   bold: boolean;
   italic: boolean;
   value: string;
+  /** Set on a detected https:// link: the URL to open. */
+  url?: string;
 }
 
 export interface HeadingSegment {
@@ -98,7 +100,46 @@ export function highlightCode(code: string, _lang: string): CodeToken[] {
 
 const INLINE_RE = /`([^`\n]+)`|\*\*([^*]+)\*\*|__([^_]+)__|\*([^*]+)\*|_([^_]+)_/g;
 
+// Only https:// links, never http:// or other schemes. Code spans are matched
+// too so a URL inside one stays code.
+const LINK_RE = /`[^`\n]+`|https:\/\/[^\s<>"'`]+/gi;
+const TRAILING_PUNCT_RE = /[.,;:!?'"*_\]}>]+$/;
+
+// Sentence punctuation after a link isn't part of it; a closing paren is
+// only when the link opened one (wikipedia-style URLs).
+function trimLink(url: string): string {
+  for (;;) {
+    const before = url;
+    url = url.replace(TRAILING_PUNCT_RE, '');
+    if (url.endsWith(')') && (url.match(/\(/g)?.length ?? 0) < (url.match(/\)/g)?.length ?? 0)) {
+      url = url.slice(0, -1);
+    }
+    if (url === before) return url;
+  }
+}
+
+// Links are pulled out before emphasis, so an underscore or asterisk in a URL
+// can't turn half of it italic.
 function parseInline(text: string): InlineRun[] {
+  const runs: InlineRun[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  LINK_RE.lastIndex = 0;
+  while ((m = LINK_RE.exec(text))) {
+    if (m[0].startsWith('`')) continue;
+    const value = trimLink(m[0]);
+    if (value.length <= 'https://'.length) continue;
+    if (m.index > last) runs.push(...parseEmphasis(text.slice(last, m.index)));
+    // Android matches the scheme case-sensitively; keyboards capitalise it.
+    runs.push({code: false, bold: false, italic: false, value, url: 'https' + value.slice(5)});
+    last = m.index + value.length;
+    LINK_RE.lastIndex = last;
+  }
+  if (last < text.length) runs.push(...parseEmphasis(text.slice(last)));
+  return runs;
+}
+
+function parseEmphasis(text: string): InlineRun[] {
   const runs: InlineRun[] = [];
   let last = 0;
   let m: RegExpExecArray | null;

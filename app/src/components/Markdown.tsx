@@ -2,7 +2,7 @@
 // paragraphs with bold/italic/inline code, headings, lists, and fenced code
 // blocks with light highlighting and a copy button.
 import React, {useMemo, useState} from 'react';
-import {Clipboard, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
+import {Clipboard, Linking, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 
 import {CodeBlockSegment, InlineRun, parseMarkdown} from '../markdown';
 import {Theme} from '../theme';
@@ -20,10 +20,13 @@ export const MarkdownText = React.memo(function MarkdownText({
   text,
   color,
   theme,
+  onLinkLongPress,
 }: {
   text: string;
   color: string;
   theme: Theme;
+  /** A link takes the touch from whatever it sits in, so pass that long-press on. */
+  onLinkLongPress?: () => void;
 }): React.JSX.Element {
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const segments = useMemo(() => parseMarkdown(text), [text]);
@@ -38,7 +41,7 @@ export const MarkdownText = React.memo(function MarkdownText({
           case 'heading':
             return (
               <Text key={i} style={[textStyle, styles.heading, HEADING_STYLES[seg.level] ?? null]}>
-                <InlineRuns runs={seg.runs} styles={styles} />
+                <InlineRuns runs={seg.runs} styles={styles} onLinkLongPress={onLinkLongPress} />
               </Text>
             );
           case 'list-item':
@@ -46,14 +49,14 @@ export const MarkdownText = React.memo(function MarkdownText({
               <View key={i} style={styles.listItemRow}>
                 <Text style={textStyle}>{seg.ordered ? '•' : '–'}</Text>
                 <Text style={[textStyle, styles.listText]}>
-                  <InlineRuns runs={seg.runs} styles={styles} />
+                  <InlineRuns runs={seg.runs} styles={styles} onLinkLongPress={onLinkLongPress} />
                 </Text>
               </View>
             );
           default:
             return (
               <Text key={i} style={textStyle}>
-                <InlineRuns runs={seg.runs} styles={styles} />
+                <InlineRuns runs={seg.runs} styles={styles} onLinkLongPress={onLinkLongPress} />
               </Text>
             );
         }
@@ -64,14 +67,34 @@ export const MarkdownText = React.memo(function MarkdownText({
 
 type Styles = ReturnType<typeof makeStyles>;
 
-function InlineRuns({runs, styles}: {runs: InlineRun[]; styles: Styles}): React.JSX.Element {
+function InlineRuns({
+  runs,
+  styles,
+  onLinkLongPress,
+}: {
+  runs: InlineRun[];
+  styles: Styles;
+  onLinkLongPress?: () => void;
+}): React.JSX.Element {
   return (
     <>
-      {runs.map((run, j) => (
-        <Text key={j} style={[run.code && styles.inlineCode, run.bold && styles.bold, run.italic && styles.italic]}>
-          {run.value}
-        </Text>
-      ))}
+      {runs.map((run, j) =>
+        run.url ? (
+          <Text
+            key={j}
+            style={styles.link}
+            // The default browser, or the app that owns the link.
+            onPress={() => Linking.openURL(run.url!).catch(() => {})}
+            onLongPress={onLinkLongPress}
+            accessibilityRole="link">
+            {run.value}
+          </Text>
+        ) : (
+          <Text key={j} style={[run.code && styles.inlineCode, run.bold && styles.bold, run.italic && styles.italic]}>
+            {run.value}
+          </Text>
+        ),
+      )}
     </>
   );
 }
@@ -144,6 +167,8 @@ function makeStyles(theme: Theme) {
     listText: {flexShrink: 1},
     bold: {fontWeight: '700'},
     italic: {fontStyle: 'italic'},
+    // The bubble's own text colour, which reads on both sides of the chat.
+    link: {textDecorationLine: 'underline'},
     inlineCode: {fontFamily: 'monospace', backgroundColor: theme.inlineCodeBg, fontSize: 13},
     codeBlock: {
       backgroundColor: theme.codeBg,
