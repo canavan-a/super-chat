@@ -5,6 +5,7 @@
 //
 //	cd tools && go run ./appart                      # writes into ../app
 //	cd tools && go run ./appart -preview /tmp/out    # also renders PNG previews
+//	cd tools && go run ./appart -readme ../docs/assets # and the README's wordmark SVGs
 //
 // It writes:
 //
@@ -181,6 +182,7 @@ func main() {
 	app := flag.String("app", "../app", "the app directory")
 	preview := flag.String("preview", "", "also render PNG previews into this directory")
 	market := flag.String("marketplace", "", "also render the Google Play store icon and feature graphic into this directory")
+	readme := flag.String("readme", "", "also render the wordmark as light and dark SVGs for the README into this directory")
 	flag.Parse()
 
 	mark, _, err := readArt(filepath.Join(*artDir, "mark.txt"))
@@ -219,6 +221,9 @@ func main() {
 	must(writeWeb(filepath.Join(*app, "public"), pals["dark"], mark, word, icon))
 	if *market != "" {
 		must(writeMarketplace(*market, pals["dark"], line, icon))
+	}
+	if *readme != "" {
+		must(writeReadme(*readme, pals, line))
 	}
 	if *preview != "" {
 		must(writePreviews(*preview, pals, mark, word, icon))

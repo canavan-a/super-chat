@@ -166,6 +166,8 @@ export interface VoiceDeps {
   presenceCount(roomKey: string): number;
   /** Android: keeps voice alive in the background (a microphone foreground service). */
   service: {update(view: VoiceView, roomName: string): void; stop(): void};
+  /** This device entered (after it told the room) or left a room's voice. */
+  onSession?(roomKey: string, action: 'join' | 'leave'): void;
   randomId(): string;
   now(): number;
 }
@@ -798,6 +800,7 @@ export function createVoiceEngine(deps: VoiceDeps) {
     else goLive();
     send('', {k: 'join', muted: ses.muted, deaf: ses.deafened});
     ses.joined = true;
+    deps.onSession?.(ses.roomKey, 'join');
     // Inside voice, keep one warmed connection for the next joiner.
     if (!warm || warm.roomKey !== ses.roomKey) {
       closeWarm();
@@ -882,7 +885,10 @@ export function createVoiceEngine(deps: VoiceDeps) {
     const ses = session;
     if (!ses) return;
     ses.alive = false;
-    if (ses.joined) send('', {k: 'leave'});
+    if (ses.joined) {
+      send('', {k: 'leave'});
+      deps.onSession?.(ses.roomKey, 'leave');
+    }
     for (const p of [...ses.peers.values()]) dropPeer(p);
     ses.timers.forEach(clearTimeout);
     ses.intervals.forEach(clearInterval);

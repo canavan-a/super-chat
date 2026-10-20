@@ -327,4 +327,90 @@ run('end to end', () => {
 
     for (const c of [alice, bob]) c.store.disconnectAll();
   }, 60_000);
+
+  it('jumps back to where reading stopped, a few or many messages behind', async () => {
+    const alice = client(url);
+    const bob = client(url);
+    const key = await alice.store.createRoom(url, 'Catch up', '#4C8BF5', 0, 'Alice');
+    const link = await alice.store.makeInvite(key, {expiresAt: 0, maxUses: 0});
+    const bobKey = await bob.store.join(bob.crypto.parseInviteLink(link)!, 'Bob');
+    await alice.store.openRoom(key);
+    let n = 0;
+    const say = async (count: number) => {
+      for (let i = 0; i < count; i++) await alice.store.send(key, {t: 'text', body: `m${n++}`});
+    };
+    const bodies = (c: Client) =>
+      c.store.getRoom(bobKey)!.messages.map((m: any) => (m.content?.t === 'text' ? m.content.body : '?'));
+
+    // Bob reads the first message (opening marks it read, as the screen does).
+    await say(1);
+    await bob.store.openRoom(bobKey);
+    await bob.store.markRead(bobKey);
+
+    // A handful behind: the read position is already loaded, nothing to page.
+    await say(5);
+    await bob.store.openRoom(bobKey);
+    await until(() => bob.store.getRoom(bobKey)!.newSinceRead === 5);
+    await bob.store.markRead(bobKey);
+    await bob.store.jumpToRead(bobKey);
+    expect(bob.store.getRoom(bobKey)!.hasNewer).toBe(false);
+    expect(bodies(bob)).toEqual(['m0', 'm1', 'm2', 'm3', 'm4', 'm5']);
+    await new Promise(r => setTimeout(r, 300)); // the receipt goes out in the background
+
+    // Many behind, on a new install: the read position comes from the
+    // server (Bob's receipt from his other device), not this device.
+    await say(120);
+    bob.store.saveVaultSoon(url, 0);
+    await new Promise(r => setTimeout(r, 300));
+    await require('@react-native-async-storage/async-storage').clear();
+    const bob2 = client(url, bob.entropy);
+    await bob2.store.refreshRooms();
+    await bob2.store.openRoom(bobKey);
+    const room = () => bob2.store.getRoom(bobKey)!;
+    await until(() => room().newSinceRead === 120);
+    expect(bodies(bob2)).not.toContain('m6');
+
+    // The jump swaps in a window around it, short of the newest.
+    await bob2.store.jumpToRead(bobKey);
+    expect(room().hasNewer).toBe(true);
+    expect(bodies(bob2)).toContain('m5');
+    expect(bodies(bob2)).toContain('m6');
+    expect(bodies(bob2)).not.toContain('m125');
+
+    // Something new meanwhile isn't added past the window's end, but the
+    // room list still shows it.
+    bob2.store.connect(url);
+    await new Promise(r => setTimeout(r, 300));
+    await alice.store.send(key, {t: 'text', body: 'live'});
+    await until(() => (room().latest?.content as any)?.body === 'live');
+    expect(bodies(bob2)).not.toContain('live');
+    expect(bob2.store.roomList().find((r: any) => r.key === bobKey)!.preview).toContain('live');
+
+    // Paging down meets the newest with nothing skipped.
+    while (room().hasNewer) await bob2.store.loadNewer(bobKey);
+    const all = bodies(bob2);
+    const tail = all.slice(all.indexOf('m5'));
+    expect(tail).toEqual([...Array.from({length: 121}, (_, i) => `m${i + 5}`), 'live']);
+
+    // From then on new messages come in as usual.
+    await alice.store.send(key, {t: 'text', body: 'after'});
+    await until(() => bodies(bob2).includes('after'));
+
+    // Call notices are lines in the history, but not news: no notification,
+    // no unread, no preview.
+    const notified: string[] = [];
+    bob2.store.onIncoming((_r: any, m: any) => notified.push(m.content?.t));
+    await bob2.store.markRead(bobKey);
+    await alice.store.postCallNotice(key, 'join');
+    await alice.store.postCallNotice(key, 'leave');
+    await until(() => room().messages.filter((m: any) => m.content?.t === 'call').length === 2);
+    expect(room().messages.filter((m: any) => m.content?.t === 'call').map((m: any) => m.content.action)).toEqual(['join', 'leave']);
+    const row = bob2.store.roomList().find((r: any) => r.key === bobKey)!;
+    expect(row.preview).toContain('after');
+    expect(row.unread).toBe(false);
+    expect(row.unreadCount).toBe(0);
+    expect(notified).toEqual([]);
+
+    for (const c of [alice, bob, bob2]) c.store.disconnectAll();
+  }, 120_000);
 });

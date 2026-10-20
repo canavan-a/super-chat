@@ -109,6 +109,7 @@ func (a *API) Router() *gin.Engine {
 	signed.GET("/rooms/:id/keys", a.rateLimit(a.readsPerAcct, byAcct), a.roomKeys)
 	signed.GET("/rooms/:id/messages", a.rateLimit(a.readsPerAcct, byAcct), a.listMessages)
 	signed.POST("/rooms/:id/messages", a.rateLimit(a.msgsPerIP, byIP), a.rateLimit(a.msgsPerAcct, byAcct), a.postMessage)
+	signed.GET("/rooms/:id/unread", a.rateLimit(a.readsPerAcct, byAcct), a.unread)
 	signed.GET("/rooms/:id/invites/uses", a.rateLimit(a.readsPerAcct, byAcct), a.inviteUses)
 	signed.GET("/rooms/:id/blobs/:blob", a.rateLimit(a.readsPerAcct, byAcct), a.getBlob)
 	signed.PUT("/rooms/:id/avatar", a.rateLimit(a.blobsPerAcct, byAcct), a.putAvatar)
@@ -276,6 +277,31 @@ func (a *API) listMessages(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"messages": msgs})
 }
 
+// unread says how far the caller has read and how many messages from others
+// came after. The read position is the furthest of what the device says
+// (after), the caller's latest receipt and their latest message: receipts and
+// member ids are the same on every device, so this is the read position
+// across devices. Kind and sender are plaintext, so the count is exact.
+func (a *API) unread(c *gin.Context) {
+	st, m, ok := a.member(c)
+	if !ok {
+		return
+	}
+	after, _ := strconv.ParseInt(c.Query("after"), 10, 64)
+	me := caller(c)
+	var own struct{ Pos int64 }
+	a.db.Raw("SELECT COALESCE(MAX(pos), 0) AS pos FROM messages WHERE room_id = ? AND sender = ? AND kind IN ('msg', 'receipt')", st.Room, me).Scan(&own)
+	readPos := max(after, own.Pos)
+	var count int64
+	if err := a.db.Model(&database.Message{}).
+		Where("room_id = ? AND epoch >= ? AND ? > 0 AND pos > ? AND kind = 'msg' AND sender != ?", st.Room, m.FirstEpoch, m.FirstEpoch, readPos, me).
+		Count(&count).Error; err != nil {
+		abort(c, http.StatusInternalServerError, "db error")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"readPos": readPos, "count": count})
+}
+
 func (a *API) postMessage(c *gin.Context) {
 	st, m, ok := a.member(c)
 	if !ok {
@@ -295,7 +321,7 @@ func (a *API) postMessage(c *gin.Context) {
 		abort(c, http.StatusBadRequest, "bad message")
 		return
 	}
-	if req.Kind != "msg" && req.Kind != "reaction" && req.Kind != "receipt" {
+	if req.Kind != "msg" && req.Kind != "reaction" && req.Kind != "receipt" && req.Kind != "call" {
 		abort(c, http.StatusBadRequest, "bad kind")
 		return
 	}
@@ -337,7 +363,7 @@ func (a *API) postMessage(c *gin.Context) {
 	}
 	a.hub.SendRoom(st.Room, wsMsg{"type": "message", "room": st.Room, "message": msg}, "")
 	// Devices that aren't connected right now (Google Play build) are woken
-	// to fetch it. Reactions and receipts don't notify, so don't wake.
+	// to fetch it. Reactions, receipts and call notices don't notify, so don't wake.
 	if req.Kind == "msg" {
 		a.push.Wake(st.Room)
 	}

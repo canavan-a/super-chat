@@ -1,4 +1,9 @@
-# super-chat
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/wordmark-dark.svg">
+    <img alt="Super Chat" src="docs/assets/wordmark-light.svg" width="420">
+  </picture>
+</h1>
 
 End-to-end encrypted group chat with no accounts to sign up for. It looks and
 feels like super-badger: a room drawer like super-badger's stations, the same

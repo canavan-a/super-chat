@@ -1,5 +1,6 @@
 // The app's one voice engine (call/engine.ts), wired to the store, this
 // platform's WebRTC (rtc.ts / rtc.web.ts) and settings.
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useSyncExternalStore} from 'react';
 
 import {b64, fingerprint, randomBytes} from '../crypto';
@@ -10,6 +11,8 @@ import {
   isServerOnline,
   onRtc,
   onServerReady,
+  postCallNotice,
+  roomsReady,
   sendRtc,
   subscribe,
   voicePresence,
@@ -47,8 +50,46 @@ export const voice = createVoiceEngine({
   onStoreChange: subscribe,
   presenceCount: key => voicePresence(key).length,
   service: voiceService,
+  onSession: (key, action) => callNotice(key, action),
   randomId: () => b64(randomBytes(9)),
   now: () => Date.now(),
+});
+
+// "Alice joined the call" / "left the call" lines in the chat. Which room's
+// call this device is in is remembered until its leave is posted, so a leave
+// that never went out (the app was killed mid-call, or offline as it left)
+// goes out the next time that room's server is reachable.
+const OPEN_CALL_KEY = 'superchat.openCall.v1';
+
+function callNotice(key: string, action: 'join' | 'leave') {
+  if (action === 'join') AsyncStorage.setItem(OPEN_CALL_KEY, key).catch(() => {});
+  postCallNotice(key, action)
+    .then(() => (action === 'leave' ? settleOpenCall(key) : undefined))
+    .catch(() => {});
+}
+
+/** The leave for `key` is out: forget it, unless this device is back in that call. */
+async function settleOpenCall(key: string) {
+  const v = voice.getView();
+  if (v.roomKey === key && v.phase !== 'idle') return;
+  if ((await AsyncStorage.getItem(OPEN_CALL_KEY)) === key) await AsyncStorage.removeItem(OPEN_CALL_KEY);
+}
+
+onServerReady(async server => {
+  const key = await AsyncStorage.getItem(OPEN_CALL_KEY).catch(() => null);
+  if (!key) return;
+  const v = voice.getView();
+  if (v.roomKey === key && v.phase !== 'idle') return; // still in it
+  const r = getRoom(key);
+  if (!r) {
+    // Left the room since: nobody to tell.
+    if (roomsReady()) AsyncStorage.removeItem(OPEN_CALL_KEY).catch(() => {});
+    return;
+  }
+  if (r.server !== server) return;
+  await postCallNotice(key, 'leave')
+    .then(() => settleOpenCall(key))
+    .catch(() => {});
 });
 
 setVoiceActionHandler(id => {

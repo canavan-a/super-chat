@@ -120,6 +120,20 @@ export interface Room {
   /** Who is in this room's voice room, by `member:sid` (not us; see call/engine.ts). */
   voice: Record<string, VoicePresence>;
   hasMore: boolean;
+  /**
+   * The messages held are a window that stops short of the newest (after a
+   * jump to the read position): new lines aren't added until it pages down
+   * to them. See jumpToRead.
+   */
+  hasNewer: boolean;
+  /** Where reading stopped when the room was last opened, for the "N new" bubble and divider. */
+  readMark: number;
+  /** Messages from others after readMark, as the server counted them on open. */
+  newSinceRead: number;
+  /** The newest line known, held or not (a window may not hold it). */
+  latest?: ChatMessage;
+  /** The newest line from someone else, for read receipts. */
+  latestOther?: ChatMessage;
   loaded: boolean;
   /** The wipe (its time) this device last handled; see dropWiped. */
   wipeSeen?: number;
@@ -231,7 +245,7 @@ export function roomList(): RoomListItem[] {
     .map(r => {
       // Live data where it's loaded, else what the list showed last launch.
       const cached = listCache[r.key];
-      const unreadCount = r.messages.filter(m => !m.pending && m.pos > (lastRead[r.key] ?? 0) && m.sender !== r.me.id).length;
+      const unreadCount = r.messages.filter(m => !m.pending && m.pos > (lastRead[r.key] ?? 0) && m.sender !== r.me.id && !isCallNotice(m)).length;
       return {
         key: r.key,
         server: r.server,
@@ -249,8 +263,8 @@ export function roomList(): RoomListItem[] {
 }
 
 function previewLine(r: Room): string | null {
-  let m: ChatMessage | undefined;
-  for (let i = r.messages.length - 1; i >= 0 && !m; i--) if (!r.messages[i].pending) m = r.messages[i];
+  let m: ChatMessage | undefined = r.hasNewer ? r.latest : undefined;
+  if (!r.hasNewer) for (let i = r.messages.length - 1; i >= 0 && !m; i--) if (!r.messages[i].pending && !isCallNotice(r.messages[i])) m = r.messages[i];
   if (!m) return null;
   const who = m.sender === r.me.id ? 'You' : (r.view?.names[m.sender] ?? 'Someone');
   const c = m.content;
@@ -276,6 +290,9 @@ function blankRoom(server: string, id: string): Room {
     typing: {},
     voice: {},
     hasMore: true,
+    hasNewer: false,
+    readMark: 0,
+    newSinceRead: 0,
     loaded: false,
     loading: false,
     lastAt: 0,
@@ -384,7 +401,7 @@ async function loadState(r: Room): Promise<void> {
   r.view = roomView(r.log, r.keys);
   r.error = null;
   // Reload after this returns: openRoom may be the caller, mid-load.
-  if (dropWiped(r)) setTimeout(() => openRoom(r.key).catch(() => {}), 0);
+  if (dropWiped(r)) setTimeout(() => openRoom(r.key, false).catch(() => {}), 0);
 }
 
 /**
@@ -400,6 +417,8 @@ function forgetMessages(r: Room, gone: (m: ChatMessage) => boolean) {
   });
   for (const b of blobs) blobCache.delete(b);
   if (blobs.length) removeSealed(blobs);
+  if (r.latest && gone(r.latest)) r.latest = undefined;
+  if (r.latestOther && gone(r.latestOther)) r.latestOther = undefined;
 }
 
 /**
@@ -416,6 +435,8 @@ function dropWiped(r: Room): boolean {
   if (first) return false;
   forgetMessages(r, () => true);
   r.hasMore = true;
+  r.hasNewer = false;
+  r.newSinceRead = 0;
   r.loaded = false;
   return true;
 }
@@ -535,7 +556,7 @@ function decrypt(r: Room, m: ServerMessage): ChatMessage {
  * the chat list and message rows are pure components and only re-render on a
  * new reference.
  */
-function ingest(r: Room, msg: ChatMessage) {
+function ingest(r: Room, msg: ChatMessage, intoWindow = false) {
   const c = msg.content;
   if (c?.t === 'reaction') {
     const byEmoji: Record<string, string[]> = {};
@@ -553,11 +574,33 @@ function ingest(r: Room, msg: ChatMessage) {
     r.receipts = {...r.receipts, [msg.sender]: c.upTo};
     return;
   }
-  r.messages = [...r.messages.filter(x => x.id !== msg.id), msg].sort((a, b) => a.pos - b.pos);
-  if (msg.pos > 0 && !msg.pending) {
+  // Call notices sit in the timeline but aren't news: no preview, no unread.
+  if (msg.pos > 0 && !msg.pending && !isCallNotice(msg)) {
     r.lastPos = Math.max(r.lastPos, msg.pos);
     r.lastAt = Math.max(r.lastAt, msg.createdAt);
+    if (msg.pos >= (r.latest?.pos ?? 0)) r.latest = msg;
+    if (msg.sender !== r.me.id && msg.pos >= (r.latestOther?.pos ?? 0)) r.latestOther = msg;
   }
+  // A window (see jumpToRead) only grows by paging down to what comes next:
+  // a line past its end would leave a hole between them.
+  if (r.hasNewer && !intoWindow && !msg.pending && msg.pos > newestHeldPos(r)) return;
+  r.messages = [...r.messages.filter(x => x.id !== msg.id), msg].sort((a, b) => a.pos - b.pos);
+}
+
+/** A "joined the call" / "left the call" line (src/call/voice.ts posts them). */
+export const isCallNotice = (m: ChatMessage): boolean => m.content?.t === 'call';
+
+/**
+ * Says in the room that this device joined or left its voice. Resolves once
+ * the server has it (a leave that couldn't go out is retried; see voice.ts).
+ */
+export function postCallNotice(key: string, action: 'join' | 'leave'): Promise<void> {
+  return send(key, {t: 'call', action});
+}
+
+function newestHeldPos(r: Room): number {
+  for (let i = r.messages.length - 1; i >= 0; i--) if (!r.messages[i].pending) return r.messages[i].pos;
+  return 0;
 }
 
 function pruneExpired(r: Room) {
@@ -574,9 +617,9 @@ const yieldToUi = () => new Promise<void>(res => setTimeout(res, 0));
  * AEAD open plus a signature check in JS; a whole page in one go held the UI
  * for a noticeable moment.
  */
-async function ingestPage(r: Room, page: ServerMessage[]) {
+async function ingestPage(r: Room, page: ServerMessage[], intoWindow = false) {
   for (let i = 0; i < page.length; i++) {
-    ingest(r, decrypt(r, page[i]));
+    ingest(r, decrypt(r, page[i]), intoWindow);
     if (i % 8 === 7) await yieldToUi();
   }
 }
@@ -622,7 +665,7 @@ export async function catchUp(key: string): Promise<void> {
   if (!r || !session.get()) return;
   if (!r.log) await loadState(r);
   connect(r.server); // and get the live connection back, if it dropped
-  const newest = r.messages.filter(m => !m.pending).slice(-1)[0];
+  const newest = newestKnown(r);
   const page = newest
     ? await api.messages(r.server, r.id, r.me, {after: newest.pos, limit: 50})
     : await api.messages(r.server, r.id, r.me, {limit: 5});
@@ -650,7 +693,7 @@ export async function refreshAll(): Promise<void> {
   await Promise.all(
     [...rooms.values()].map(async r => {
       if (!r.log || r.loading) return;
-      const newest = r.messages.filter(m => !m.pending).slice(-1)[0];
+      const newest = newestKnown(r);
       if (!newest) return prefetchLatest(r).catch(() => {});
       const page = await api.messages(r.server, r.id, r.me, {after: newest.pos, limit: 200}).catch(() => []);
       await ingestPage(r, page);
@@ -659,19 +702,57 @@ export async function refreshAll(): Promise<void> {
   emit();
 }
 
-export async function openRoom(key: string): Promise<void> {
+/**
+ * What to catch up from: the newest message held, or while a window is open
+ * (which stops short of the newest), the newest one known.
+ */
+function newestKnown(r: Room): ChatMessage | undefined {
+  if (r.hasNewer) return r.latest;
+  return r.messages.filter(m => !m.pending).slice(-1)[0];
+}
+
+/** Replaces what's held with the newest page: the bottom of the chat. */
+async function loadLatest(r: Room): Promise<void> {
+  const page = await api.messages(r.server, r.id, r.me, {limit: 50});
+  r.messages = r.messages.filter(m => m.pending);
+  r.hasMore = page.length === 50;
+  r.hasNewer = false;
+  await ingestPage(r, page);
+}
+
+/**
+ * Opens a room at the bottom. Pass fresh = false to only catch up (a
+ * reconnect, a wipe): that keeps a window open and the "N new" bubble as is.
+ * A fresh open notes where reading stopped (readMark) before the screen marks
+ * it all read, and asks the server how many came after, for the bubble.
+ */
+export async function openRoom(key: string, fresh = true): Promise<void> {
   const r = rooms.get(key);
-  if (!r || r.loading) return;
+  if (!r) return;
+  // Synchronously, before the screen's markRead moves lastRead on.
+  const mark = lastRead[key] ?? 0;
+  if (fresh) {
+    r.readMark = mark;
+    r.newSinceRead = 0;
+  }
+  if (r.loading) {
+    if (fresh) countUnread(r, mark).catch(() => {});
+    return;
+  }
   r.loading = true;
   emit();
   try {
     if (!r.log) await loadState(r);
-    const newest = r.messages.filter(m => !m.pending).slice(-1)[0];
-    const page = newest
-      ? await api.messages(r.server, r.id, r.me, {after: newest.pos, limit: 200})
-      : await api.messages(r.server, r.id, r.me, {limit: 50});
-    if (!newest) r.hasMore = page.length === 50;
-    await ingestPage(r, page);
+    if (fresh) countUnread(r, mark).catch(() => {});
+    const newest = newestKnown(r);
+    if (!newest || (fresh && r.hasNewer)) {
+      await loadLatest(r);
+    } else {
+      const page = await api.messages(r.server, r.id, r.me, {after: newest.pos, limit: 200});
+      // More than a page behind: skip the gap and start from the bottom.
+      if (page.length === 200 && !r.hasNewer) await loadLatest(r);
+      else await ingestPage(r, page);
+    }
     pruneExpired(r);
     r.loaded = true;
     r.error = null;
@@ -702,6 +783,96 @@ export async function loadOlder(key: string): Promise<void> {
   }
 }
 
+/**
+ * How many messages from others came after `mark`, counted by the server,
+ * which also knows how far this member read on other devices (their
+ * receipts): the bubble starts from whichever is further.
+ */
+async function countUnread(r: Room, mark: number): Promise<void> {
+  if (!r.lastPos || r.lastPos <= mark) return;
+  const {readPos, count} = await api.unread(r.server, r.id, r.me, mark);
+  if (r.readMark !== mark) return; // opened again since
+  r.readMark = readPos;
+  r.newSinceRead = count;
+  emit();
+}
+
+/**
+ * Jumps to where reading stopped (readMark). If that's already held, there's
+ * nothing to load: the screen scrolls to it. Otherwise this swaps what's held
+ * for a window around it, which loadNewer pages down from until it meets the
+ * newest again (hasNewer). Reactions and receipts are kept: they're per room,
+ * not per page.
+ */
+export async function jumpToRead(key: string): Promise<void> {
+  const r = rooms.get(key);
+  if (!r || r.loading) return;
+  const oldest = r.messages.find(m => !m.pending);
+  if (oldest && (oldest.pos <= r.readMark || !r.hasMore)) return;
+  r.loading = true;
+  emit();
+  try {
+    const [before, after] = await Promise.all([
+      api.messages(r.server, r.id, r.me, {before: r.readMark + 1, limit: 20}),
+      api.messages(r.server, r.id, r.me, {after: r.readMark, limit: 50}),
+    ]);
+    r.messages = r.messages.filter(m => m.pending);
+    r.hasMore = before.length === 20;
+    r.hasNewer = true;
+    await ingestPage(r, [...before, ...after], true);
+    settleNewer(r, after.length === 50);
+    pruneExpired(r);
+  } catch (e) {
+    r.error = String((e as Error).message ?? e);
+  } finally {
+    r.loading = false;
+    emit();
+  }
+}
+
+/** The next page down in a window; it closes once it reaches the newest. */
+export async function loadNewer(key: string): Promise<void> {
+  const r = rooms.get(key);
+  if (!r || r.loading || !r.hasNewer) return;
+  r.loading = true;
+  emit();
+  try {
+    const page = await api.messages(r.server, r.id, r.me, {after: newestHeldPos(r), limit: 50});
+    await ingestPage(r, page, true);
+    settleNewer(r, page.length === 50, page.length === 0);
+  } catch (e) {
+    r.error = String((e as Error).message ?? e);
+  } finally {
+    r.loading = false;
+    emit();
+  }
+}
+
+/**
+ * A short page means the window reached the newest, unless one arrived
+ * meanwhile (held back by ingest): then there's still a page to go. An empty
+ * page settles it either way (lastPos can point at a deleted message).
+ */
+function settleNewer(r: Room, full: boolean, empty = false) {
+  r.hasNewer = !empty && (full || newestHeldPos(r) < r.lastPos);
+}
+
+/** Leaves a window for the bottom of the chat. */
+export async function jumpToLatest(key: string): Promise<void> {
+  const r = rooms.get(key);
+  if (!r || !r.hasNewer) return;
+  r.loading = true;
+  emit();
+  try {
+    await loadLatest(r);
+  } catch (e) {
+    r.error = String((e as Error).message ?? e);
+  } finally {
+    r.loading = false;
+    emit();
+  }
+}
+
 export async function markRead(key: string): Promise<void> {
   const r = rooms.get(key);
   if (!r) return;
@@ -709,8 +880,9 @@ export async function markRead(key: string): Promise<void> {
   lastRead[key] = r.lastPos;
   AsyncStorage.setItem(LAST_READ_KEY, JSON.stringify(lastRead)).catch(() => {});
   emit();
-  // Tell the room, unless the newest line is our own.
-  const newest = r.messages.filter(m => !m.pending && m.content && m.sender !== r.me.id).slice(-1)[0];
+  // Tell the room, unless the newest line is our own. (Not the newest held:
+  // a window may stop short of it.)
+  const newest = r.latestOther?.content ? r.latestOther : undefined;
   if (newest && r.receipts[r.me.id] !== newest.id) {
     send(key, {t: 'receipt', upTo: newest.id}).catch(() => {});
   }
@@ -834,7 +1006,7 @@ async function resync(server: string) {
       await loadState(r);
       if (r.loaded) {
         r.loading = false;
-        await openRoom(r.key);
+        await openRoom(r.key, false);
       }
       await maybeRotate(r);
     } catch (e) {
@@ -1014,7 +1186,7 @@ async function handlePush(server: string, msg: any) {
         if (parsed.kind === 'epoch' && parsed.author !== r.me.id) republishProfile(r).catch(() => {});
         if (parsed.kind === 'delete') forgetMessages(r, m => m.id === parsed.pub.msg);
         r.view = roomView(r.log, r.keys);
-        if (parsed.kind === 'wipe' && dropWiped(r)) openRoom(r.key).catch(() => {});
+        if (parsed.kind === 'wipe' && dropWiped(r)) openRoom(r.key, false).catch(() => {});
       }
       pruneExpired(r);
       await maybeRotate(r);
@@ -1263,6 +1435,8 @@ export async function send(key: string, content: MessageContent, blobs: string[]
   if (!k) throw new Error("You don't have this room's key yet.");
   const enc = encryptMessage(r.me, r.id, epoch, k, content);
   const isLine = content.t === 'text' || content.t === 'file' || content.t === 'ice';
+  // Sending from up in a window goes to the bottom, where the message lands.
+  if (isLine && r.hasNewer) await jumpToLatest(key);
   const local: ChatMessage = {
     id: enc.id,
     pos: Number.MAX_SAFE_INTEGER,
@@ -1451,7 +1625,7 @@ export function unreact(key: string, target: string) {
 export async function wipeChat(key: string) {
   const r = rooms.get(key)!;
   await append(r, () => ({events: [{kind: 'wipe', pub: {}}]}));
-  if (dropWiped(r)) await openRoom(r.key);
+  if (dropWiped(r)) await openRoom(r.key, false);
   emit();
 }
 

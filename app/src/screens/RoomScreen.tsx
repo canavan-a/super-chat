@@ -39,7 +39,11 @@ import {
   fetchFile,
   getRoom,
   loadImage,
+  jumpToLatest,
+  jumpToRead,
+  loadNewer,
   loadOlder,
+  isCallNotice,
   markRead,
   openRoom,
   peekImage,
@@ -382,22 +386,112 @@ function ChatList({
     if (view.wiped) from = Math.max(from, view.wiped.at);
     if (view.retentionDays) from = Math.max(from, Date.now() - view.retentionDays * DAY_MS);
     if (room.hasMore) from = Math.max(from, messages[0]?.createdAt ?? Infinity);
-    return view.activity.filter(a => a.at >= from);
-  }, [view, meId, room.hasMore, messages]);
+    // A window stops short of the newest: nothing after its last message yet.
+    const held = messages.filter(m => !m.pending);
+    const to = room.hasNewer ? (held[held.length - 1]?.createdAt ?? -Infinity) : Infinity;
+    return view.activity.filter(a => a.at >= from && a.at <= to);
+  }, [view, meId, room.hasMore, room.hasNewer, messages]);
+
+  // Where reading stopped when the room was opened: a "New messages" line
+  // above the first message from someone else after it, and a bubble at the
+  // top to jump there while it's off screen.
+  const {readMark, newSinceRead} = room;
+  const firstUnread = useMemo(
+    () => (newSinceRead > 0 ? messages.find(m => !m.pending && m.pos > readMark && m.sender !== meId && !isCallNotice(m))?.id : undefined),
+    [messages, readMark, newSinceRead, meId],
+  );
   const newestFirst = useMemo(() => {
     const items: ChatItem[] = [];
     let i = 0;
     for (const m of messages) {
       while (i < notices.length && notices[i].at <= m.createdAt) items.push(notices[i++]);
+      if (m.id === firstUnread) items.push(UNREAD_DIVIDER);
       items.push(m);
     }
     while (i < notices.length) items.push(notices[i++]);
     return items.reverse();
-  }, [messages, notices]);
+  }, [messages, notices, firstUnread]);
+
+  // The bubble shows once the list has said what's on screen, until the
+  // line has been seen or it's dismissed; both reset when the room is opened again.
+  const [unreadSeen, setUnreadSeen] = useState(false);
+  const [unreadDismissed, setUnreadDismissed] = useState(false);
+  const [viewChecked, setViewChecked] = useState(false);
+  useEffect(() => {
+    setUnreadSeen(false);
+    setUnreadDismissed(false);
+  }, [readMark]);
+  const onViewableItemsChanged = useRef(({viewableItems}: {viewableItems: {key: string}[]}) => {
+    setViewChecked(true);
+    if (viewableItems.some(v => v.key === UNREAD_DIVIDER.id)) setUnreadSeen(true);
+  }).current;
+  const viewabilityConfig = useRef({itemVisiblePercentThreshold: 50}).current;
+  const showUnread = viewChecked && newSinceRead > 0 && !unreadSeen && !unreadDismissed;
+
+  // Jumping: load around the read position if it isn't held (see
+  // jumpToRead), then scroll to the line once the list has it.
+  const pendingJump = useRef(false);
+  const jumpRetried = useRef(false);
+  const jumpToUnread = () => {
+    setUnreadSeen(true);
+    pendingJump.current = true;
+    jumpRetried.current = false;
+    jumpToRead(room.key).catch(() => {});
+  };
+  useEffect(() => {
+    if (!pendingJump.current || room.loading) return;
+    pendingJump.current = false;
+    const index = newestFirst.findIndex(i => i === UNREAD_DIVIDER);
+    // Inverted: viewPosition 1 is the top of the screen; a little below it.
+    if (index >= 0) listRef.current?.scrollToIndex({index, viewPosition: 0.85, animated: true});
+    else listRef.current?.scrollToEnd({animated: true});
+  }, [newestFirst, room.loading]);
+  const onScrollToIndexFailed = (info: {index: number; averageItemLength: number}) => {
+    // Rows not measured yet: get close, then try again once they're drawn.
+    listRef.current?.scrollToOffset({offset: info.averageItemLength * info.index, animated: false});
+    if (jumpRetried.current) return;
+    jumpRetried.current = true;
+    setTimeout(() => listRef.current?.scrollToIndex({index: info.index, viewPosition: 0.85, animated: true}), 100);
+  };
+
+  // In a window, paging down toward the newest as the bottom comes near.
+  const [pagingDown, setPagingDown] = useState(false);
+  const pagingDownRef = useRef(false);
+  const scrollY = useRef(0);
+  const contentHeight = useRef(0);
+  const webAnchor = useRef<{offset: number; height: number} | null>(null);
+  const loadLater = () => {
+    if (!room.hasNewer || pagingDownRef.current) return;
+    pagingDownRef.current = true;
+    setPagingDown(true);
+    // New rows land at the bottom (offset 0 when inverted), pushing what's on
+    // screen up. Native keeps it in place (maintainVisibleContentPosition);
+    // react-native-web doesn't, so correct it once the rows are measured.
+    if (Platform.OS === 'web') webAnchor.current = {offset: scrollY.current, height: contentHeight.current};
+    loadNewer(room.key).finally(() => {
+      pagingDownRef.current = false;
+      setPagingDown(false);
+      // The last rows may measure a moment after the load settles.
+      setTimeout(() => (webAnchor.current = null), 300);
+    });
+  };
+  const onContentSizeChange = (_w: number, h: number) => {
+    const anchor = webAnchor.current;
+    contentHeight.current = h;
+    if (!anchor || h === anchor.height) return;
+    // The page goes in a few rows at a time: shift by each growth in turn.
+    const offset = anchor.offset + (h - anchor.height);
+    webAnchor.current = {offset, height: h};
+    // The browser's own scroll anchoring may have done it already.
+    if (Math.abs(scrollY.current - offset) > 2) listRef.current?.scrollToOffset({offset, animated: false});
+  };
+
   const handleScroll = (e: any) => {
     const {contentOffset, layoutMeasurement} = e.nativeEvent;
+    scrollY.current = contentOffset.y;
     const far = contentOffset.y > layoutMeasurement.height * 1.5;
     if (far !== showJump) setShowJump(far);
+    if (room.hasNewer && contentOffset.y < layoutMeasurement.height) loadLater();
   };
   const loadEarlier = () => {
     if (!room.hasMore || loadingOlderRef.current) return;
@@ -406,13 +500,16 @@ function ChatList({
   };
 
   const renderItem = ({item, index}: {item: ChatItem; index: number}) => {
+    if (isDivider(item)) return <UnreadLine styles={styles} />;
+    if (isMessage(item) && isCallNotice(item))
+      return <CallNotice msg={item} name={item.sender === meId ? 'You' : nameOf(item.sender)} styles={styles} theme={theme} />;
     if (isNotice(item)) return <ActivityNotice activity={item} name={item.member === meId ? 'You' : nameOf(item.member)} styles={styles} />;
     // Inverted: the message before this one in time is the next in the list.
-    // A notice in between breaks the group.
+    // A notice or the unread line in between breaks the group.
     const before = newestFirst[index + 1];
     const after = newestFirst[index - 1];
-    const prev = before && !isNotice(before) ? before : undefined;
-    const next = after && !isNotice(after) ? after : undefined;
+    const prev = before && isMessage(before) && !isCallNotice(before) ? before : undefined;
+    const next = after && isMessage(after) && !isCallNotice(after) ? after : undefined;
     const mine = item.sender === meId;
     const grouped = !!prev && sameGroup(prev, item);
     const lastInGroup = !next || !sameGroup(item, next);
@@ -464,10 +561,19 @@ function ChatList({
         scrollEventThrottle={32}
         onEndReached={loadEarlier}
         onEndReachedThreshold={0.5}
+        onViewableItemsChanged={onViewableItemsChanged}
+        viewabilityConfig={viewabilityConfig}
+        onScrollToIndexFailed={onScrollToIndexFailed}
+        onContentSizeChange={onContentSizeChange}
+        // Rows paged in below what's on screen (a window paging down) don't
+        // move it; at the bottom, new messages still scroll into view.
+        maintainVisibleContentPosition={{minIndexForVisible: 0, autoscrollToTopThreshold: 40}}
+        // Inverted, the header is drawn at the bottom: where a window pages down.
+        ListHeaderComponent={pagingDown ? <ActivityIndicator style={styles.olderSpinner} size="small" color={theme.textMuted} /> : null}
         // Inverted, the footer is drawn at the top: where the history starts.
         ListFooterComponent={
           <View>
-            {room.loading && <ActivityIndicator style={styles.olderSpinner} size="small" color={theme.textMuted} />}
+            {room.loading && !pagingDown && <ActivityIndicator style={styles.olderSpinner} size="small" color={theme.textMuted} />}
             {!room.hasMore && room.loaded && (
               <View style={styles.startNotice}>
                 <Icon name="shield" size={14} color={theme.textMuted} />
@@ -492,14 +598,28 @@ function ChatList({
         maxToRenderPerBatch={10}
         windowSize={9}
       />
-      {showJump && (
+      {showUnread && (
+        <View style={styles.unreadBubble}>
+          <Pressable style={styles.unreadJump} onPress={jumpToUnread}>
+            <Text style={styles.jumpText}>
+              ↑ {newSinceRead > 99 ? '99+' : newSinceRead} new message{newSinceRead === 1 ? '' : 's'}
+            </Text>
+          </Pressable>
+          <Pressable style={styles.unreadClose} onPress={() => setUnreadDismissed(true)} hitSlop={8} accessibilityLabel="Dismiss">
+            <Icon name="close" size={14} color={theme.primaryText} />
+          </Pressable>
+        </View>
+      )}
+      {(showJump || room.hasNewer) && (
         <Pressable
           style={styles.jumpButton}
-          onPress={() => {
+          onPress={async () => {
             setShowJump(false);
+            // In a window the bottom isn't loaded: load it, then go there.
+            await jumpToLatest(room.key);
             listRef.current?.scrollToOffset({offset: 0, animated: true});
           }}>
-          <Text style={styles.jumpText}>↓ Jump to bottom</Text>
+          <Text style={styles.jumpText}>↓ Jump to {room.hasNewer ? 'latest' : 'bottom'}</Text>
         </Pressable>
       )}
 
@@ -629,13 +749,63 @@ const sameGroup = (a: ChatMessage, b: ChatMessage) => a.sender === b.sender && b
 
 const DAY_MS = 24 * 60 * 60_000;
 
-/** A row in the chat: a message, or a join/leave notice between them. */
-type ChatItem = ChatMessage | ActivityView;
+/**
+ * A message's time, with the date once it's from before today, so scrolled
+ * back (or jumped to the read position) you can tell where you are:
+ * "14:05", "Yesterday 14:05", "Mar 3, 14:05", "Mar 3, 2025, 14:05".
+ */
+export function chatTime(ts: number, now = Date.now()): string {
+  const d = new Date(ts);
+  const time = d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  if (ts >= today.getTime()) return time;
+  if (ts >= today.getTime() - DAY_MS) return `Yesterday ${time}`;
+  const sameYear = d.getFullYear() === today.getFullYear();
+  const date = d.toLocaleDateString([], {month: 'short', day: 'numeric', ...(sameYear ? {} : {year: 'numeric'})});
+  return `${date}, ${time}`;
+}
+
+/**
+ * A row in the chat: a message, a join/leave notice between them, or the
+ * line above the first message that came after the read position.
+ */
+type ChatItem = ChatMessage | ActivityView | UnreadDivider;
+interface UnreadDivider {
+  id: 'unread-divider';
+  divider: true;
+}
+const UNREAD_DIVIDER: UnreadDivider = {id: 'unread-divider', divider: true};
+const isDivider = (i: ChatItem): i is UnreadDivider => 'divider' in i;
 const isNotice = (i: ChatItem): i is ActivityView => 'member' in i;
+const isMessage = (i: ChatItem): i is ChatMessage => !isDivider(i) && !isNotice(i);
+
+/** "Alice joined the call · 14:05", styled like the other room notices (a wipe, the start of history). */
+function CallNotice({msg, name, styles, theme}: {msg: ChatMessage; name: string; styles: Styles; theme: Theme}) {
+  const joined = msg.content?.t === 'call' && msg.content.action === 'join';
+  return (
+    <View style={[styles.startNotice, styles.callNotice]}>
+      <Icon name="headphones" size={14} color={theme.textMuted} />
+      <Text style={styles.startNoticeText}>
+        {name} {joined ? 'joined' : 'left'} the call · {chatTime(msg.createdAt)}
+      </Text>
+    </View>
+  );
+}
+
+function UnreadLine({styles}: {styles: Styles}) {
+  return (
+    <View style={styles.unreadLine}>
+      <View style={styles.unreadRule} />
+      <Text style={styles.unreadLineText}>New messages</Text>
+      <View style={styles.unreadRule} />
+    </View>
+  );
+}
 
 function ActivityNotice({activity, name, styles}: {activity: ActivityView; name: string; styles: Styles}) {
   const what = activity.kind === 'join' ? 'joined' : activity.kind === 'leave' ? 'left' : name === 'You' ? 'were removed' : 'was removed';
-  const time = new Date(activity.at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  const time = chatTime(activity.at);
   return (
     <Text style={styles.activityNotice}>
       {name} {what} · {time}
@@ -687,7 +857,7 @@ const MessageRow = React.memo(function MessageRow({
 }): React.JSX.Element {
   const c = msg.content;
   const textColor = mine ? theme.bubbleUserText : theme.bubbleAssistantText;
-  const time = new Date(msg.createdAt).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  const time = chatTime(msg.createdAt);
 
   // Reactions: who reacted with what, and which are mine.
   const entries = reactions ? Object.entries(reactions).filter(([, who]) => who.length > 0) : [];
@@ -964,6 +1134,7 @@ function makeStyles(theme: Theme) {
       borderColor: theme.border,
     },
     startNoticeText: {flex: 1, fontSize: 12, color: theme.textMuted},
+    callNotice: {marginTop: 6, marginBottom: 6},
     activityNotice: {alignSelf: 'center', marginVertical: 8, fontSize: 12, color: theme.textMuted},
     rowOuter: {flexDirection: 'row', alignItems: 'flex-end', gap: 6, marginTop: 10},
     rowOuterMine: {justifyContent: 'flex-end'},
@@ -1084,6 +1255,21 @@ function makeStyles(theme: Theme) {
       elevation: 4,
     },
     jumpText: {color: theme.primaryText, fontSize: 13, fontWeight: '700'},
+    unreadBubble: {
+      position: 'absolute',
+      top: 12,
+      alignSelf: 'center',
+      flexDirection: 'row',
+      alignItems: 'center',
+      borderRadius: 999,
+      backgroundColor: theme.primary,
+      elevation: 4,
+    },
+    unreadJump: {paddingLeft: 14, paddingRight: 8, paddingVertical: 8},
+    unreadClose: {paddingRight: 12, paddingLeft: 4, paddingVertical: 8},
+    unreadLine: {flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 10},
+    unreadRule: {flex: 1, height: 1, backgroundColor: theme.primary},
+    unreadLineText: {fontSize: 12, fontWeight: '700', color: theme.primary},
     sheetBackdrop: {justifyContent: 'flex-end', padding: 12},
     sheet: {
       borderRadius: 12,

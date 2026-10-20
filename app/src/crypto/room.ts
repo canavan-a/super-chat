@@ -70,7 +70,9 @@ export type MessageContent =
   | {t: 'receipt'; upTo: string}
   // A STUN/TURN server someone shared for voice (Settings → Voice → Share).
   // Its credentials are only readable by the room's members, like any message.
-  | {t: 'ice'; server: {urls: string; username?: string; credential?: string}};
+  | {t: 'ice'; server: {urls: string; username?: string; credential?: string}}
+  // Someone joined or left the room's voice: a line in the chat's history.
+  | {t: 'call'; action: 'join' | 'leave'};
 
 export interface FileRef {
   blob: string;
@@ -82,10 +84,10 @@ export interface FileRef {
   h?: number;
 }
 
-export type ServerKind = 'msg' | 'reaction' | 'receipt';
+export type ServerKind = 'msg' | 'reaction' | 'receipt' | 'call';
 
 export function serverKind(c: MessageContent): ServerKind {
-  return c.t === 'reaction' ? 'reaction' : c.t === 'receipt' ? 'receipt' : 'msg';
+  return c.t === 'reaction' ? 'reaction' : c.t === 'receipt' ? 'receipt' : c.t === 'call' ? 'call' : 'msg';
 }
 
 const msgAd = (room: string, epoch: number, id: string, sender: string) => utf8(`sc-msg|${room}|${epoch}|${id}|${sender}`);

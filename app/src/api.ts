@@ -162,7 +162,9 @@ export const api = {
       r => r.messages,
     );
   },
-  post: (server: string, room: string, by: Signer, m: {id: string; epoch: number; kind: string; ct: string; blobs?: string[]}) =>
+  unread: (server: string, room: string, by: Signer, after: number) =>
+    request<{readPos: number; count: number}>(server, 'GET', `/v1/rooms/${room}/unread?after=${after}`, by),
+  post: (server: string, room: string, by: Signer, m:{id: string; epoch: number; kind: string; ct: string; blobs?: string[]}) =>
     request<{pos: number; createdAt: number}>(server, 'POST', `/v1/rooms/${room}/messages`, by, m),
   inviteUses: (server: string, room: string, by: Signer) =>
     request<{uses: {invite: string; member: string; usedAt: number}[]}>(server, 'GET', `/v1/rooms/${room}/invites/uses`, by).then(

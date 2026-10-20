@@ -53,5 +53,6 @@ background (Settings → "Match app icon to theme").
 
     cd tools && go run ./appart              # -> src/logo/logoData.ts, iconPalette.json, launcher icons
     cd tools && go run ./appart -preview /tmp/out   # also PNG previews per theme
+    cd tools && go run ./appart -readme ../docs/assets   # also the top README's wordmark SVGs
 
 Theme colors are read from `src/theme.tsx`.

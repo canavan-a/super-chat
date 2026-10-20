@@ -189,11 +189,12 @@ nobody can be waiting on an admin.
 ## Messages
 
 `POST /v1/rooms/:id/messages {"id","epoch","kind","ct","blobs":[ids]}`, where
-`kind` is one of `msg` (notifies), `reaction` or `receipt` (the server keeps
+`kind` is one of `msg` (notifies), `reaction`, `call` (a voice join/leave
+line; doesn't notify or count as unread) or `receipt` (the server keeps
 only the latest receipt per sender). `epoch` must be the room's current epoch.
 
 ```
-inner  = JSON {"v":1,"t":"text"|"file"|"reaction"|"receipt"|"ice", ...content, "ts"}
+inner  = JSON {"v":1,"t":"text"|"file"|"reaction"|"receipt"|"ice"|"call", ...content, "ts"}
 sig    = Ed25519(sender, "sc-msg|" ‖ room ‖ "|" ‖ id ‖ "|" ‖ inner)
 ct     = b64(aead(K_epoch, JSON{"c": b64(inner), "s": b64(sig)}, "sc-msg|" ‖ room ‖ "|" ‖ epoch ‖ "|" ‖ id ‖ "|" ‖ sender))
 ```
@@ -204,6 +205,7 @@ The content is one of:
 - reaction: `{target, emoji, remove?}`
 - receipt: `{upTo}`
 - ice: `{server: {urls, username?, credential?}}`, a STUN/TURN server shared for voice (see "Voice rooms")
+- call: `{action: "join"|"leave"}`, posted by a device entering or leaving the room's voice (a device that quit mid-call posts its `leave` once it's next online)
 
 **Blobs**: `PUT /v1/rooms/:id/blobs` (raw body, at most 25 MB) → `{id}`, and
 `GET /v1/rooms/:id/blobs/:blob`. The bytes are `aead(fileKey, file, "sc-blob")`.
@@ -230,6 +232,15 @@ and profile picture instead of the room's.
 
 Members only ever see messages and envelopes from epochs at or after their
 first one.
+
+**Reading**: `GET /v1/rooms/:id/messages?before=&after=&limit=` (at most 200,
+always oldest first) pages through the log by `pos`. `GET
+/v1/rooms/:id/unread?after=<pos>` → `{readPos, count}` is how far the caller
+has read and how many `msg`s from others came after: `readPos` is the
+furthest of `after` (the device's own idea), the caller's latest receipt and
+the caller's latest message. A member's id is the same on every device, so
+this carries the read position across devices. `kind` and `sender` are
+plaintext, so the count is exact without decrypting anything.
 
 ## Retention and deletes
 

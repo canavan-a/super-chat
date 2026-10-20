@@ -445,6 +445,67 @@ func TestReceiptsKeepOnlyLatest(t *testing.T) {
 	}
 }
 
+func TestUnreadCount(t *testing.T) {
+	e := newEnv(t)
+	alice, bob := e.user(), e.user()
+	r := e.createRoom(alice)
+	iv, _, _ := r.invite(alice, 0, 0)
+	r.join(bob, iv, []string{alice.id})
+	unread := func(u *user, after int64) (readPos, count int64) {
+		code, body := u.raw("GET", "/v1/rooms/"+r.id+"/unread?after="+strconv.FormatInt(after, 10), nil)
+		want(t, "unread", code, 200, string(body))
+		var out struct{ ReadPos, Count int64 }
+		_ = json.Unmarshal(body, &out)
+		return out.ReadPos, out.Count
+	}
+
+	// Only messages from others count: not reactions, receipts, call notices
+	// or your own.
+	r.send(alice, "msg")
+	r.send(alice, "msg")
+	r.send(alice, "reaction")
+	r.send(alice, "receipt")
+	r.send(bob, "reaction")
+	_, code, body := r.send(alice, "call")
+	want(t, "call notice", code, 201, body)
+	if rp, n := unread(bob, 0); rp != 0 || n != 2 {
+		t.Fatalf("bob: readPos %d count %d, want 0 2", rp, n)
+	}
+	_, msgs := r.messages(bob)
+	first := msgs[0].Pos
+	if _, n := unread(bob, first); n != 1 {
+		t.Fatalf("after first: count %d, want 1", n)
+	}
+
+	// A receipt (from any of bob's devices) moves the read position.
+	r.send(bob, "receipt")
+	rp, n := unread(bob, 0)
+	if rp <= first || n != 0 {
+		t.Fatalf("after receipt: readPos %d count %d", rp, n)
+	}
+	// So does sending: you've read what you replied to.
+	r.send(alice, "msg")
+	r.send(bob, "msg")
+	if rp2, n := unread(bob, 0); rp2 <= rp || n != 0 {
+		t.Fatalf("after own message: readPos %d count %d", rp2, n)
+	}
+	// A device further ahead than the server knows wins.
+	if rp, _ := unread(bob, 1<<40); rp != 1<<40 {
+		t.Fatalf("after: readPos %d", rp)
+	}
+
+	// Nothing from before you joined.
+	carol := e.user()
+	r.join(carol, iv, []string{alice.id, bob.id})
+	if _, n := unread(carol, 0); n != 0 {
+		t.Fatalf("carol: count %d, want 0", n)
+	}
+	r.send(alice, "msg")
+	if _, n := unread(carol, 0); n != 1 {
+		t.Fatalf("carol after alice: count %d, want 1", n)
+	}
+}
+
 func TestLeaveThenRotate(t *testing.T) {
 	e := newEnv(t)
 	alice, bob, carol := e.user(), e.user(), e.user()
