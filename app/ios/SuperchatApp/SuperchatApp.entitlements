@@ -2,12 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Invite links (https://chat.superbadger.io/i/…) open in the app: the
      server serves the matching /.well-known/apple-app-site-association.
-     aps-environment is ready for APNs; Xcode switches it to production when
-     exporting for the App Store. Both must stay enabled on the App ID. -->
+     aps-environment matches the App Store provisioning profile (push goes
+     through FCM to APNs). Both must stay enabled on the App ID. -->
 <plist version="1.0">
 <dict>
 	<key>aps-environment</key>
-	<string>development</string>
+	<string>production</string>
 	<key>com.apple.developer.associated-domains</key>
 	<array>
 		<string>applinks:chat.superbadger.io</string>

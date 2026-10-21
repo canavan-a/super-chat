@@ -305,7 +305,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = SuperchatApp/SuperchatApp.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Distribution";
+				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 4W9H62B6C2;
 				INFOPLIST_FILE = SuperchatApp/Info.plist;
@@ -322,6 +323,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.superchatapp";
 				PRODUCT_NAME = SuperchatApp;
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "Super Chat iOS App Store";
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
 			};
