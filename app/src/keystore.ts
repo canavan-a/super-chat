@@ -1,6 +1,8 @@
-// Where the account's entropy lives on Android: the Keystore, via
-// react-native-keychain, behind the device's biometrics or screen-lock PIN.
+// Where the account's entropy lives: the Android Keystore or the iOS
+// Keychain, via react-native-keychain, behind the device's biometrics or
+// screen-lock PIN/passcode.
 // Nothing else about the account is stored: every key is derived from it.
+import {Platform} from 'react-native';
 import * as Keychain from 'react-native-keychain';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -15,7 +17,16 @@ export type LockMode = 'biometric' | 'none';
 
 export async function hasStoredIdentity(): Promise<boolean> {
   const services = await Keychain.getAllGenericPasswordServices().catch(() => [] as string[]);
-  return services.includes(SERVICE);
+  if (!services.includes(SERVICE)) return false;
+  // The iOS Keychain outlives the app, but AsyncStorage doesn't, and
+  // storeIdentity always writes MODE_KEY. A key without it was left by a
+  // deleted install: forget it, so removing the app erases the account on
+  // iOS too, as the privacy policy says.
+  if (Platform.OS === 'ios' && (await AsyncStorage.getItem(MODE_KEY)) === null) {
+    await Keychain.resetGenericPassword({service: SERVICE}).catch(() => {});
+    return false;
+  }
+  return true;
 }
 
 export async function storeIdentity(entropy: Uint8Array, _passphrase?: string): Promise<LockMode> {

@@ -1,0 +1,131 @@
+# iOS builds: pushing a tag like ios-v0.4.0 builds the App Store app, signs
+# it, and uploads it to App Store Connect, where it shows up under TestFlight
+# and can be picked for a version. Google Play stays manual
+# (release/release-play.sh), and the sideload APK keeps its own release
+# (release/release.sh, app-v* tags).
+#
+# Versions come from the tag: CFBundleShortVersionString is "0.4.0", and the
+# build number (CFBundleVersion) is major*10000 + minor*100 + patch, so it
+# always goes up with the version. Minor and patch stay below 100. Apple
+# takes each build number once: a failed or rejected upload needs a new tag.
+#
+# Signing is Xcode's cloud signing with an App Store Connect API key (App
+# Store Connect → Users and Access → Integrations, App Manager access), so
+# there's no certificate or profile to keep. Repo secrets:
+#  ASC_KEY_ID           the key's ID
+#  ASC_ISSUER_ID        the issuer ID shown above the keys
+#  ASC_KEY_P8_BASE64    base64 -w0 AuthKey_XXXX.p8
+
+name: iOS build
+
+on:
+  push:
+    tags: ['ios-v*']
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      name: ${{ steps.v.outputs.name }}
+      code: ${{ steps.v.outputs.code }}
+    steps:
+      - id: v
+        run: |
+          v="${GITHUB_REF_NAME#ios-v}"
+          if [[ ! "$v" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::the tag must look like ios-v1.2.3"; exit 1
+          fi
+          major=$((10#${BASH_REMATCH[1]})) minor=$((10#${BASH_REMATCH[2]})) patch=$((10#${BASH_REMATCH[3]}))
+          if (( minor > 99 || patch > 99 )); then
+            echo "::error::minor and patch must be below 100"; exit 1
+          fi
+          echo "name=$v" >>"$GITHUB_OUTPUT"
+          echo "code=$((major * 10000 + minor * 100 + patch))" >>"$GITHUB_OUTPUT"
+
+  ios:
+    needs: version
+    runs-on: macos-15
+    env:
+      VERSION_NAME: ${{ needs.version.outputs.name }}
+      VERSION_CODE: ${{ needs.version.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # React Native 0.81 needs Node 20.19.4 or later.
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install
+        working-directory: app
+        run: npm ci
+
+      - name: Pods
+        working-directory: app/ios
+        run: pod install
+
+      # Set on the app's own project only: passed to xcodebuild, they'd
+      # override every pod's version too.
+      - name: Version
+        working-directory: app/ios
+        run: |
+          sed -i '' \
+            -e "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $VERSION_NAME;/" \
+            -e "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $VERSION_CODE;/" \
+            SuperchatApp.xcodeproj/project.pbxproj
+
+      - name: API key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+        run: |
+          if [[ -z "$ASC_KEY_ID" || -z "$ASC_ISSUER_ID" || -z "$ASC_KEY_P8_BASE64" ]]; then
+            echo "::error::set the ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8_BASE64 secrets"; exit 1
+          fi
+          printf '%s' "$ASC_KEY_P8_BASE64" | base64 -d >"$RUNNER_TEMP/AuthKey.p8"
+          {
+            echo "ASC_AUTH=-allowProvisioningUpdates -authenticationKeyPath $RUNNER_TEMP/AuthKey.p8 -authenticationKeyID $ASC_KEY_ID -authenticationKeyIssuerID $ASC_ISSUER_ID"
+          } >>"$GITHUB_ENV"
+
+      - name: Archive
+        working-directory: app/ios
+        run: |
+          xcodebuild archive -quiet \
+            -workspace SuperchatApp.xcworkspace \
+            -scheme SuperchatApp \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/SuperchatApp.xcarchive" \
+            $ASC_AUTH
+
+      # destination=upload sends the signed build straight to App Store
+      # Connect instead of writing an .ipa.
+      - name: Upload to App Store Connect
+        run: |
+          cat >"$RUNNER_TEMP/ExportOptions.plist" <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>4W9H62B6C2</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/SuperchatApp.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export" \
+            $ASC_AUTH
+
+      - name: Remove API key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/AuthKey.p8"

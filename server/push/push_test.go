@@ -58,6 +58,19 @@ func TestWakeSendsDataOnlyAndCoalesces(t *testing.T) {
 	if d := msg["data"].(map[string]any); len(d) != 1 || d["w"] != "1" {
 		t.Fatalf("data %v", d)
 	}
+	// iPhones get a fixed alert, the same for every room, and the topic.
+	apns := msg["apns"].(map[string]any)
+	payload := apns["payload"].(map[string]any)
+	if payload["t"] != Topic("room1") {
+		t.Fatalf("apns topic %v", payload["t"])
+	}
+	alert := payload["aps"].(map[string]any)["alert"].(map[string]any)
+	if alert["title"] != "Super Chat" || alert["body"] != "New message" {
+		t.Fatalf("apns alert %v", alert)
+	}
+	if h := apns["headers"].(map[string]any); h["apns-collapse-id"] != Topic("room1") || h["apns-push-type"] != "alert" {
+		t.Fatalf("apns headers %v", h)
+	}
 	time.Sleep(Window + 300*time.Millisecond)
 	if count() != 2 {
 		t.Fatalf("after the window: %d sends, want 2 (one trailing)", count())

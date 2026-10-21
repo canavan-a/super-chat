@@ -86,3 +86,21 @@ func (a *API) assetLinks(c *gin.Context) {
 		},
 	}})
 }
+
+// appleAppSiteAssociation is iOS's assetlinks.json: Apple's CDN fetches it
+// when the app is installed, and invite links (/i/…) then open in the app.
+// 404 while no app IDs are set, so iOS doesn't cache an empty list.
+func (a *API) appleAppSiteAssociation(c *gin.Context) {
+	if len(a.cfg.AppleAppIDs) == 0 {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"applinks": gin.H{
+			"details": []gin.H{{
+				"appIDs":     a.cfg.AppleAppIDs,
+				"components": []gin.H{{"/": "/i/*"}},
+			}},
+		},
+	})
+}

@@ -1,8 +1,8 @@
-// Picking and saving files on Android. Picked files are copied into the
+// Picking and saving files on Android and iOS. Picked files are copied into the
 // app's cache (so a content:// URI can be read), read into memory, and the
 // copy is deleted straight away: nothing decrypted or about to be encrypted
 // is left lying on disk.
-import {errorCodes, isErrorWithCode, keepLocalCopy, pick, types} from '@react-native-documents/picker';
+import {errorCodes, isErrorWithCode, keepLocalCopy, pick, saveDocuments, types} from '@react-native-documents/picker';
 import {launchImageLibrary} from 'react-native-image-picker';
 import RNFS from 'react-native-fs';
 import {NativeModules} from 'react-native';
@@ -77,7 +77,8 @@ interface FileSaverNative {
   write(uri: string, base64: string): Promise<string | null>;
   discard(uri: string): Promise<void>;
 }
-const FileSaver = NativeModules.FileSaver as FileSaverNative;
+// Android only (FileSaverModule.kt); iOS saves through the document picker.
+const FileSaver = NativeModules.FileSaver as FileSaverNative | undefined;
 
 /**
  * "Save as…": opens the system save dialog first, so the user picks the folder
@@ -90,6 +91,7 @@ export async function saveFileAs(
   mime: string,
   makeData: () => Promise<Uint8Array>,
 ): Promise<SavedFile | null> {
+  if (!FileSaver) return saveViaFilesApp(name, mime, makeData);
   const uri = await FileSaver.create(name, mime || 'application/octet-stream');
   if (!uri) return null;
   try {
@@ -98,6 +100,37 @@ export async function saveFileAs(
   } catch (e) {
     FileSaver.discard(uri).catch(() => {});
     throw e;
+  }
+}
+
+/**
+ * iOS: there's no save dialog that hands back a place to write, so the bytes
+ * go to a temporary file first, which the Files picker then copies to where
+ * the user chooses. The temporary copy is deleted either way.
+ */
+async function saveViaFilesApp(
+  name: string,
+  mime: string,
+  makeData: () => Promise<Uint8Array>,
+): Promise<SavedFile | null> {
+  const dir = `${RNFS.TemporaryDirectoryPath}/save-${Date.now()}`;
+  const path = `${dir}/${name.replace(/[/\\]/g, '_')}`;
+  await RNFS.mkdir(dir);
+  try {
+    await RNFS.writeFile(path, base64.encode(await makeData()), 'base64');
+    const [res] = await saveDocuments({
+      sourceUris: [`file://${encodeURI(path)}`],
+      mimeType: mime || 'application/octet-stream',
+      fileName: name,
+      copy: true,
+    });
+    if (res.error) throw new Error(`Couldn't save ${name}.`);
+    return {name: res.name ?? name, location: 'Files'};
+  } catch (e) {
+    if (isCancel(e)) return null;
+    throw e;
+  } finally {
+    RNFS.unlink(dir).catch(() => {});
   }
 }
 

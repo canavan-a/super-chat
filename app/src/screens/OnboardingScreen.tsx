@@ -28,7 +28,7 @@ import {pickTextFile, saveTextFileAs} from '../files';
 import {NEEDS_PASSPHRASE, storeIdentity} from '../keystore';
 import {LogoArt} from '../logo/LogoArt';
 import {Theme, useTheme} from '../theme';
-import {PrivacyLink, PrivacyPolicy} from '../privacy/PrivacyPolicy';
+import {AgreeToTerms, PrivacyPolicy, TermsOfUse} from '../privacy/PrivacyPolicy';
 
 type Step =
   | {name: 'welcome'}
@@ -66,6 +66,7 @@ export function OnboardingScreen({onDone}: {onDone: (entropy: Uint8Array) => voi
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const [step, setStep] = useState<Step>({name: 'welcome'});
   const [privacy, setPrivacy] = useState(false);
+  const [terms, setTerms] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -113,6 +114,7 @@ export function OnboardingScreen({onDone}: {onDone: (entropy: Uint8Array) => voi
   };
 
   if (privacy) return <PrivacyPolicy onClose={() => setPrivacy(false)} />;
+  if (terms) return <TermsOfUse onClose={() => setTerms(false)} />;
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
@@ -145,7 +147,7 @@ export function OnboardingScreen({onDone}: {onDone: (entropy: Uint8Array) => voi
               {error}
             </Notice>
           )}
-          <PrivacyLink onPress={() => setPrivacy(true)} />
+          <AgreeToTerms onTerms={() => setTerms(true)} onPrivacy={() => setPrivacy(true)} />
         </View>
       )}
 

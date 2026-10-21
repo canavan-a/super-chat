@@ -40,12 +40,17 @@ async function show(view: VoiceView, roomName: string) {
     shown = null;
     return;
   }
-  const [{default: notifee, AndroidForegroundServiceType}, ch, msgs] =
-    await Promise.all([
-      import('@notifee/react-native'),
-      import('../notifications/channels'),
-      import('../notifications/messages'),
-    ]);
+  const [
+    {default: notifee, AndroidForegroundServiceType},
+    ch,
+    msgs,
+    {isSideload},
+  ] = await Promise.all([
+    import('@notifee/react-native'),
+    import('../notifications/channels'),
+    import('../notifications/messages'),
+    import('../distribution'),
+  ]);
   await ch.ensureChannels();
   const status =
     view.phase === 'live'
@@ -66,8 +71,14 @@ async function show(view: VoiceView, roomName: string) {
       pressAction: ch.PRESS_ACTION,
       asForegroundService: true,
       color: await msgs.notificationColor(),
+      // Every type asked for here must be declared on the service in the
+      // flavor's manifest, or startForeground throws and the app dies. Only
+      // the sideload build declares dataSync (its background connection
+      // shares this notification); the Play build has microphone alone.
       foregroundServiceTypes: [
-        AndroidForegroundServiceType.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+        ...(isSideload
+          ? [AndroidForegroundServiceType.FOREGROUND_SERVICE_TYPE_DATA_SYNC]
+          : []),
         AndroidForegroundServiceType.FOREGROUND_SERVICE_TYPE_MICROPHONE,
       ],
       ongoing: true,

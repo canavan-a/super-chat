@@ -3,13 +3,20 @@
 //            always-on background connection for notifications, and the
 //            in-app updater.
 //  play      Google Play, which allows neither.
+//  ios       the App Store build: neither, like play.
 //  web       the browser build.
 import {NativeModules, Platform} from 'react-native';
 
-export type Distribution = 'sideload' | 'play' | 'web';
+export type Distribution = 'sideload' | 'play' | 'ios' | 'web';
 
 export const distribution: Distribution =
-  Platform.OS === 'web' ? 'web' : NativeModules.Distribution?.flavor === 'play' ? 'play' : 'sideload';
+  Platform.OS === 'web'
+    ? 'web'
+    : Platform.OS === 'ios'
+      ? 'ios'
+      : NativeModules.Distribution?.flavor === 'play'
+        ? 'play'
+        : 'sideload';
 
 /** The sideloaded Android build: background notifications and self-updates. */
 export const isSideload = distribution === 'sideload';

@@ -20,8 +20,21 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.superchatapp</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>superchat</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<true/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>
@@ -33,7 +46,9 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Super Chat doesn't use the camera.</string>
+	<string>Super Chat never turns on your camera: calls are voice only. The calling library includes camera support, which is why iOS asks for this text.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Used to connect voice calls directly when you are on the same network as the other people in the call.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Unlock Super Chat with Face ID.</string>
 	<key>NSMicrophoneUsageDescription</key>

@@ -44,7 +44,7 @@ import {OnboardingScreen} from './screens/OnboardingScreen';
 import {RoomScreen} from './screens/RoomScreen';
 import {RoomSettingsScreen} from './screens/RoomSettingsScreen';
 import {SettingsScreen} from './screens/SettingsScreen';
-import {PrivacyPolicy} from './privacy/PrivacyPolicy';
+import {PrivacyPolicy, TermsOfUse} from './privacy/PrivacyPolicy';
 import {VoiceScreen} from './screens/VoiceScreen';
 import {VoiceBar} from './components/VoiceBar';
 import {session} from './session';
@@ -61,6 +61,7 @@ const TITLES: Record<Route['name'], string> = {
   settings: 'Settings',
   voice: 'Voice',
   privacy: 'Privacy policy',
+  terms: 'Terms of use',
 };
 
 // Screens report their own title/subtitle/actions up here so they render in
@@ -177,7 +178,7 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
 
   const goBack = useCallback(() => {
     if (route.name === 'roomSettings' || route.name === 'voice') navigate({name: 'room', key: route.key});
-    else if (route.name === 'privacy') navigate({name: 'settings'});
+    else if (route.name === 'privacy' || route.name === 'terms') navigate({name: 'settings'});
     else navigate({name: 'home'});
   }, [route, navigate]);
 
@@ -202,10 +203,10 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
   // also notifies while the app is open, for rooms other than the one on
   // screen.
   useEffect(() => {
-    if (Platform.OS !== 'android') return;
+    if (Platform.OS !== 'android' && Platform.OS !== 'ios') return;
     if (!isSideload) {
-      // Google Play build: no background service. Notify while the app runs,
-      // and get woken through FCM when it doesn't (src/push.ts).
+      // Google Play and iOS builds: no background service. Notify while the
+      // app runs, and get woken through FCM when it doesn't (src/push.ts).
       import('./service/BackgroundMonitorService').then(({watchWhileOpen}) => watchWhileOpen());
       import('./push').then(({startPush}) => startPush().catch(() => {}));
     } else if (settingsStore.get().bgNotifications) {
@@ -233,7 +234,7 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
   // Notification tap → open that room (or Settings, for the update
   // notification), from any app state (see index.js).
   useEffect(() => {
-    if (Platform.OS !== 'android') return;
+    if (Platform.OS !== 'android' && Platform.OS !== 'ios') return;
     let unsubscribeForeground: (() => void) | undefined;
     const open = (target: string | null) => {
       if (target === SETTINGS_NAV) navigate({name: 'settings'});
@@ -264,7 +265,7 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
   // Tell the notification side which room is on screen.
   const viewingKey = route.name === 'room' ? route.key : null;
   useEffect(() => {
-    if (Platform.OS !== 'android') return;
+    if (Platform.OS !== 'android' && Platform.OS !== 'ios') return;
     const report = (state: AppStateStatus) => {
       const key = state === 'active' ? viewingKey : null;
       import('./notifications/messages')
@@ -474,9 +475,14 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
           {route.name === 'newRoom' && <NewRoomScreen onNavigate={navigate} />}
           {route.name === 'join' && <JoinScreen key={route.link ?? ''} link={route.link} onNavigate={navigate} />}
           {route.name === 'settings' && (
-            <SettingsScreen onForgotten={onForgotten} onOpenPrivacy={() => navigate({name: 'privacy'})} />
+            <SettingsScreen
+              onForgotten={onForgotten}
+              onOpenPrivacy={() => navigate({name: 'privacy'})}
+              onOpenTerms={() => navigate({name: 'terms'})}
+            />
           )}
           {route.name === 'privacy' && <PrivacyPolicy />}
+          {route.name === 'terms' && <TermsOfUse />}
           {route.name === 'voice' && (
             <VoiceScreen key={route.key} roomKey={route.key} onNavigate={navigate} onHeaderChange={setHeaderInfo} />
           )}
@@ -563,9 +569,10 @@ function ThemeChrome(): null {
 
 /**
  * Android draws the app edge to edge (under the status and navigation bars;
- * required when targeting API 35+), so keep everything clear of them with
- * the real insets, and lift it above the keyboard (adjustResize no longer
- * does that edge to edge). The web build does both in index.html.
+ * required when targeting API 35+), and iOS always does (under the notch and
+ * home indicator), so keep everything clear of them with the real insets,
+ * and lift it above the keyboard (adjustResize no longer does that edge to
+ * edge, and iOS never did). The web build does both in index.html.
  */
 function SystemBars({children}: {children: React.ReactNode}): React.JSX.Element {
   const theme = useTheme();
@@ -576,6 +583,16 @@ function SystemBars({children}: {children: React.ReactNode}): React.JSX.Element 
   // navigation bar under the keyboard, so the message box sat half behind it.
   const [keyboard, setKeyboard] = useState(0);
   useEffect(() => {
+    if (Platform.OS === 'ios') {
+      // iOS reports the keyboard's full height (it covers the home indicator
+      // too), and the Will events move the box along with it.
+      const show = Keyboard.addListener('keyboardWillShow', e => setKeyboard(e.endCoordinates.height));
+      const hide = Keyboard.addListener('keyboardWillHide', () => setKeyboard(0));
+      return () => {
+        show.remove();
+        hide.remove();
+      };
+    }
     if (Platform.OS !== 'android') return;
     const show = Keyboard.addListener('keyboardDidShow', e => {
       const covered = Dimensions.get('screen').height - e.endCoordinates.screenY;
@@ -587,7 +604,7 @@ function SystemBars({children}: {children: React.ReactNode}): React.JSX.Element 
       hide.remove();
     };
   }, [insets.bottom]);
-  if (Platform.OS !== 'android') return <>{children}</>;
+  if (Platform.OS === 'web') return <>{children}</>;
   return (
     <View
       style={[

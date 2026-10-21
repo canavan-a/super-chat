@@ -1,5 +1,6 @@
-// The privacy policy (policy.ts) as a screen: in the app from Settings and
-// the welcome and lock screens, and on the web as its own page at /privacy.
+// The privacy policy (policy.ts) and terms of use (terms.ts) as screens: in
+// the app from Settings and the welcome and lock screens, and on the web as
+// pages of their own at /privacy and /terms.
 import React, {useEffect, useMemo} from 'react';
 import {
   BackHandler,
@@ -13,7 +14,8 @@ import {
 
 import {Icon} from '../components/Icon';
 import {Theme, useTheme} from '../theme';
-import {CONTACT, POLICY, UPDATED, type PolicyBlock} from './policy';
+import {CONTACT, POLICY, UPDATED, type PolicyBlock, type PolicySection} from './policy';
+import {TERMS, TERMS_UPDATED} from './terms';
 
 /** Text with **bold** runs. */
 function Rich({
@@ -84,9 +86,42 @@ function Block({
 }
 
 /** onClose: shows a close button (in the app); omit on the web page. */
-export function PrivacyPolicy({
+export function PrivacyPolicy({onClose}: {onClose?: () => void}): React.JSX.Element {
+  return (
+    <LegalDoc
+      barTitle="Privacy policy"
+      title="Super Chat Privacy Policy"
+      updated={UPDATED}
+      sections={POLICY}
+      onClose={onClose}
+    />
+  );
+}
+
+/** The terms of use (terms.ts), shown like the privacy policy. */
+export function TermsOfUse({onClose}: {onClose?: () => void}): React.JSX.Element {
+  return (
+    <LegalDoc
+      barTitle="Terms of use"
+      title="Super Chat Terms of Use"
+      updated={TERMS_UPDATED}
+      sections={TERMS}
+      onClose={onClose}
+    />
+  );
+}
+
+function LegalDoc({
+  barTitle,
+  title,
+  updated,
+  sections,
   onClose,
 }: {
+  barTitle: string;
+  title: string;
+  updated: string;
+  sections: PolicySection[];
   onClose?: () => void;
 }): React.JSX.Element {
   const theme = useTheme();
@@ -103,7 +138,7 @@ export function PrivacyPolicy({
     <View style={styles.fill}>
       {onClose ? (
         <View style={styles.bar}>
-          <Text style={styles.barTitle}>Privacy policy</Text>
+          <Text style={styles.barTitle}>{barTitle}</Text>
           <Pressable
             onPress={onClose}
             hitSlop={10}
@@ -115,10 +150,10 @@ export function PrivacyPolicy({
       ) : null}
       <ScrollView style={styles.fill} contentContainerStyle={styles.content}>
         {!onClose ? (
-          <Text style={styles.title}>Super Chat Privacy Policy</Text>
+          <Text style={styles.title}>{title}</Text>
         ) : null}
-        <Text style={styles.updated}>Last updated {UPDATED}</Text>
-        {POLICY.map(section => (
+        <Text style={styles.updated}>Last updated {updated}</Text>
+        {sections.map(section => (
           <View key={section.title} style={styles.section}>
             <Text style={styles.h2} accessibilityRole="header">
               {section.title}
@@ -138,11 +173,56 @@ export function PrivacyPolicy({
 }
 
 /** The quiet "Privacy policy" link at the bottom of a screen: small, muted, no button around it. */
-export function PrivacyLink({
-  onPress,
+export function PrivacyLink({onPress}: {onPress: () => void}): React.JSX.Element {
+  return <QuietLink label="Privacy policy" onPress={onPress} />;
+}
+
+/** The terms and privacy links side by side, as at the bottom of Settings. */
+export function LegalLinks({
+  onTerms,
+  onPrivacy,
 }: {
-  onPress: () => void;
+  onTerms: () => void;
+  onPrivacy: () => void;
 }): React.JSX.Element {
+  return (
+    <View style={linkStyles.row}>
+      <QuietLink label="Terms of use" onPress={onTerms} />
+      <QuietLink label="Privacy policy" onPress={onPrivacy} />
+    </View>
+  );
+}
+
+/**
+ * Under the welcome screen's buttons: continuing is agreeing to the terms
+ * (App Review asks for that before anyone can post).
+ */
+export function AgreeToTerms({
+  onTerms,
+  onPrivacy,
+}: {
+  onTerms: () => void;
+  onPrivacy: () => void;
+}): React.JSX.Element {
+  const theme = useTheme();
+  const muted = [linkStyles.text, {color: theme.textMuted}];
+  const link = [muted, linkStyles.underline];
+  return (
+    <Text style={[muted, linkStyles.agree]}>
+      By continuing you agree to the{' '}
+      <Text style={link} onPress={onTerms} accessibilityRole="link">
+        Terms of use
+      </Text>{' '}
+      and{' '}
+      <Text style={link} onPress={onPrivacy} accessibilityRole="link">
+        Privacy policy
+      </Text>
+      .
+    </Text>
+  );
+}
+
+function QuietLink({label, onPress}: {label: string; onPress: () => void}): React.JSX.Element {
   const theme = useTheme();
   return (
     <Pressable
@@ -150,16 +230,17 @@ export function PrivacyLink({
       hitSlop={8}
       accessibilityRole="link"
       style={linkStyles.wrap}>
-      <Text style={[linkStyles.text, {color: theme.textMuted}]}>
-        Privacy policy
-      </Text>
+      <Text style={[linkStyles.text, {color: theme.textMuted}]}>{label}</Text>
     </Pressable>
   );
 }
 
 const linkStyles = StyleSheet.create({
   wrap: {alignSelf: 'center', paddingVertical: 10, marginTop: 8},
+  row: {flexDirection: 'row', justifyContent: 'center', gap: 20},
   text: {fontSize: 11, opacity: 0.6},
+  underline: {textDecorationLine: 'underline'},
+  agree: {textAlign: 'center', paddingVertical: 10, marginTop: 8, lineHeight: 16},
 });
 
 function makeStyles(theme: Theme) {

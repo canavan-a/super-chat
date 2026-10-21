@@ -90,6 +90,7 @@ func (a *API) Router() *gin.Engine {
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true, "app": "superchat"}) })
 	r.GET("/i/:id", a.landing)
 	r.GET("/.well-known/assetlinks.json", a.assetLinks)
+	r.GET("/.well-known/apple-app-site-association", a.appleAppSiteAssociation)
 	r.GET("/v1/ws", a.ws)
 
 	byAcct := func(c *gin.Context) string { return caller(c) }

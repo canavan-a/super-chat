@@ -1,5 +1,6 @@
-// Notifications for the Google Play build, through FCM (the sideload build
-// keeps its own background connection instead; see src/distribution.ts).
+// Notifications for the Google Play and iOS builds, through FCM (the sideload
+// build keeps its own background connection instead; see src/distribution.ts).
+// On iOS, FCM hands wake-ups to APNs (ios/SuperchatApp/PushModule.m).
 //
 // Each room has an FCM topic derived from its ID (server/push.Topic computes
 // the same). This device subscribes itself to its rooms' topics, so the chat
@@ -7,7 +8,8 @@
 // across rooms. A wake-up carries only the topic: the app fetches the new
 // messages from the server and decrypts them itself (store.catchUp), and the
 // usual notification code shows them. With the app closed (keys not in
-// memory) the native side shows a plain "New message" instead.
+// memory) a plain "New message" shows instead: drawn by the native side on
+// Android, and by iOS itself from the push on iPhone.
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {AppState, NativeEventEmitter, NativeModules} from 'react-native';
 
@@ -38,7 +40,8 @@ export async function startPush(): Promise<void> {
   if (!Native || started) return;
   started = true;
   // Without Google Play services (say, GrapheneOS without sandboxed Play)
-  // there's no FCM: notifications then only come while the app is open.
+  // there's no FCM, and on iOS this asks for permission to notify, which
+  // may be refused: notifications then only come while the app is open.
   if (!(await Native.isAvailable().catch(() => false))) return;
   Native.clearLocked();
   AppState.addEventListener(

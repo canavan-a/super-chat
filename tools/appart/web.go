@@ -109,23 +109,33 @@ func renderSplash(p Palette, mark, word Grid, w, h int) *image.NRGBA {
 	return img
 }
 
-// writeMarketplace renders Google Play's store graphics: the 512x512 app
-// icon (a full square, which Play rounds itself) and the 1024x500 feature
-// graphic (the one-line wordmark alone on the dark theme's background).
+// writeMarketplace renders the store graphics, all the one-line wordmark
+// alone on the dark theme's background except the icon. Google Play: the
+// 512x512 app icon (a full square, which Play rounds itself) and the
+// 1024x500 feature graphic. App Store: the 3840x1646 product page header,
+// whose wordmark stays inside Apple's centred 1646x661 safe area since the
+// sides are cropped on narrow screens, and the 3840x2560 (3:2) search
+// results image.
 func writeMarketplace(dir string, p Palette, line, icon Grid) error {
 	if err := writePNG(filepath.Join(dir, "icon-512.png"), renderIcon(p, icon, 512, false, iconWidth(icon), 0)); err != nil {
 		return err
 	}
-	return writePNG(filepath.Join(dir, "feature-graphic-1024x500.png"), renderBanner(p, line, 1024, 500))
+	if err := writePNG(filepath.Join(dir, "feature-graphic-1024x500.png"), renderBanner(p, line, 1024, 500, 0.6*1024, 0.5*500)); err != nil {
+		return err
+	}
+	if err := writePNG(filepath.Join(dir, "appstore-header-3840x1646.png"), renderBanner(p, line, 3840, 1646, 0.9*1646, 0.9*661)); err != nil {
+		return err
+	}
+	return writePNG(filepath.Join(dir, "appstore-search-3840x2560.png"), renderBanner(p, line, 3840, 2560, 0.6*3840, 0.5*2560))
 }
 
-// renderBanner draws a wordmark centered on the theme's background, 60% of
-// the width (or less, if that would be too tall); cells are 3:4 like the art's.
-func renderBanner(p Palette, g Grid, w, h int) *image.NRGBA {
+// renderBanner draws a wordmark centered on the theme's background, as large
+// as fits a maxW x maxH box; cells are 3:4 like the art's.
+func renderBanner(p Palette, g Grid, w, h int, maxW, maxH float64) *image.NRGBA {
 	img := image.NewNRGBA(image.Rect(0, 0, w, h))
 	bg := p.Bg
 	draw.Draw(img, img.Bounds(), &image.Uniform{color.NRGBA{clamp(bg[0]), clamp(bg[1]), clamp(bg[2]), 255}}, image.Point{}, draw.Src)
-	cw := math.Min(0.6*float64(w)/float64(g.w()), 0.5*float64(h)/(float64(len(g))*pixAspect))
+	cw := math.Min(maxW/float64(g.w()), maxH/(float64(len(g))*pixAspect))
 	ch := cw * pixAspect
 	x0 := (float64(w) - cw*float64(g.w())) / 2
 	y0 := (float64(h) - ch*float64(len(g))) / 2

@@ -27,6 +27,15 @@ target 'SuperchatApp' do
     :app_path => "#{Pod::Config.instance.installation_root}/.."
   )
 
+  # Firebase Cloud Messaging, for push (SuperchatApp/PushModule.m): the
+  # same FCM topics as the Google Play build, delivered through APNs.
+  # Firebase's Swift pods need modular headers from the pods they use,
+  # since the app links pods statically rather than as frameworks.
+  pod 'FirebaseCore', '~> 11.0', :modular_headers => true
+  pod 'FirebaseCoreInternal', '~> 11.0', :modular_headers => true
+  pod 'FirebaseMessaging', '~> 11.0', :modular_headers => true
+  pod 'GoogleUtilities', :modular_headers => true
+
   post_install do |installer|
     # https://github.com/facebook/react-native/blob/main/packages/react-native/scripts/react_native_pods.rb#L197-L202
     react_native_post_install(

@@ -29,6 +29,7 @@ import {TypingDots} from '../components/TypingDots';
 import {VoiceStrip} from '../components/VoiceStrip';
 import {tick} from '../haptics';
 import {platformConfirm} from '../platformConfirm';
+import {openMail, reportMailto} from '../privacy/contact';
 import {QUICK_REACTIONS, settingsStore} from '../settings';
 import {Route} from '../routes';
 import {
@@ -41,6 +42,7 @@ import {
   loadImage,
   jumpToLatest,
   jumpToRead,
+  leave,
   loadNewer,
   loadOlder,
   isCallNotice,
@@ -224,6 +226,7 @@ export function RoomScreen({
           styles={styles}
           theme={theme}
           onReply={m => setReplyTo(m)}
+          onLeft={() => onNavigate({name: 'home'})}
         />
       )}
 
@@ -323,6 +326,7 @@ function ChatList({
   styles,
   theme,
   onReply,
+  onLeft,
 }: {
   room: Room;
   meId: string;
@@ -331,10 +335,30 @@ function ChatList({
   styles: Styles;
   theme: Theme;
   onReply: (m: ChatMessage) => void;
+  /** After blocking someone, which leaves the room. */
+  onLeft: () => void;
 }): React.JSX.Element {
   const listRef = useRef<FlatList>(null);
   const [showJump, setShowJump] = useState(false);
   const [menuFor, setMenuFor] = useState<ChatMessage | null>(null);
+  // Tap on someone's picture (iOS): the sheet to report or block them.
+  const [memberFor, setMemberFor] = useState<string | null>(null);
+  const report = (member: string) =>
+    openMail(reportMailto({server: room.server, room: room.id, member, name: nameOf(member)}));
+  // Blocking is leaving: there's no way to hide one member's messages in a
+  // room you stay in. The warning matches Room settings' "Leave room".
+  const block = (member: string) => {
+    const admins = room.view?.members.filter(m => m.role === 'admin').length ?? 0;
+    const members = room.view?.members.length ?? 0;
+    platformConfirm(
+      `Block ${nameOf(member)}?`,
+      isAdmin && admins === 1 && members > 1
+        ? "Blocking leaves this room, and you're its only admin. Make someone else admin first, or nobody will be able to invite or manage members."
+        : "Blocking leaves this room: you won't see anything more from them here, and you'll lose access to the room and its messages on this device.",
+      'Block and leave',
+      () => leave(room.key).then(onLeft, () => {}),
+    );
+  };
   // Long-press on a message's reactions: the sheet listing who reacted with what.
   const [whoFor, setWhoFor] = useState<ChatMessage | null>(null);
   const [viewer, setViewerRaw] = useState<{uri: string; ref: FileRef} | null>(null);
@@ -537,6 +561,7 @@ function ChatList({
         onReact={emoji => react(room.key, item.id, emoji).catch(() => {})}
         onOpenImage={setViewer}
         onShowReactions={setWhoFor}
+        onAvatarPress={Platform.OS === 'ios' ? () => setMemberFor(item.sender) : undefined}
       />
     );
   };
@@ -681,6 +706,32 @@ function ChatList({
               </>
             )}
           </View>
+      </Overlay>
+
+      <Overlay visible={memberFor !== null} onClose={() => setMemberFor(null)} style={styles.sheetBackdrop}>
+        <View style={styles.sheet}>
+          <Text style={styles.sheetTitle}>{memberFor ? nameOf(memberFor) : ''}</Text>
+          <View style={styles.menuDivider} />
+          <Pressable
+            style={styles.menuRow}
+            onPress={() => {
+              const m = memberFor!;
+              setMemberFor(null);
+              report(m);
+            }}>
+            <Text style={styles.menuRowText}>Report</Text>
+          </Pressable>
+          <View style={styles.menuDivider} />
+          <Pressable
+            style={styles.menuRow}
+            onPress={() => {
+              const m = memberFor!;
+              setMemberFor(null);
+              block(m);
+            }}>
+            <Text style={[styles.menuRowText, styles.destructive]}>Block</Text>
+          </Pressable>
+        </View>
       </Overlay>
 
       <Overlay visible={whoFor !== null} onClose={() => setWhoFor(null)} style={styles.sheetBackdrop}>
@@ -832,6 +883,7 @@ const MessageRow = React.memo(function MessageRow({
   onReact,
   onOpenImage,
   onShowReactions,
+  onAvatarPress,
 }: {
   msg: ChatMessage;
   mine: boolean;
@@ -854,6 +906,8 @@ const MessageRow = React.memo(function MessageRow({
   onOpenImage: (v: {uri: string; ref: FileRef}) => void;
   /** Long-press on the reactions: who reacted with what. */
   onShowReactions: (m: ChatMessage) => void;
+  /** Tap on their picture: report or block them (iOS, for App Review). */
+  onAvatarPress?: () => void;
 }): React.JSX.Element {
   const c = msg.content;
   const textColor = mine ? theme.bubbleUserText : theme.bubbleAssistantText;
@@ -902,7 +956,14 @@ const MessageRow = React.memo(function MessageRow({
     <View style={[styles.rowOuter, mine ? styles.rowOuterMine : null, grouped && styles.rowGrouped]}>
       {!mine && (
         <View style={styles.avatarCol}>
-          {lastInGroup && <Avatar roomKey={roomKey} member={msg.sender} name={name} size={28} />}
+          {lastInGroup &&
+            (onAvatarPress ? (
+              <Pressable onPress={onAvatarPress} hitSlop={6} accessibilityRole="button" accessibilityLabel={`${name}: report or block`}>
+                <Avatar roomKey={roomKey} member={msg.sender} name={name} size={28} />
+              </Pressable>
+            ) : (
+              <Avatar roomKey={roomKey} member={msg.sender} name={name} size={28} />
+            ))}
         </View>
       )}
       <View style={[styles.row, mine ? styles.rowMine : styles.rowTheirs]}>
@@ -1282,6 +1343,7 @@ function makeStyles(theme: Theme) {
       alignSelf: 'center',
     },
     sheetHint: {fontSize: 11, color: theme.textMuted, padding: 12, paddingTop: 4},
+    sheetTitle: {paddingHorizontal: 16, paddingVertical: 12, fontSize: 13, fontWeight: '700', color: theme.textMuted},
     menuRow: {paddingHorizontal: 16, paddingVertical: 14},
     menuRowText: {fontSize: 15, fontWeight: '600', color: theme.text},
     destructive: {color: theme.danger},

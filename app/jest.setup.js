@@ -20,7 +20,7 @@ jest.mock('react-native-keychain', () => ({
 }));
 jest.mock('react-native-fs', () => ({}));
 jest.mock('@react-native-documents/picker', () => ({
-  pick: jest.fn(), keepLocalCopy: jest.fn(), isErrorWithCode: () => false, errorCodes: {}, types: {},
+  pick: jest.fn(), keepLocalCopy: jest.fn(), saveDocuments: jest.fn(), isErrorWithCode: () => false, errorCodes: {}, types: {},
 }));
 jest.mock('react-native-image-picker', () => ({launchImageLibrary: jest.fn()}));
 // Voice: tests inject fake peer connections into src/call/engine.ts.

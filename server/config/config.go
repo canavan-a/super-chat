@@ -18,7 +18,11 @@ type Config struct {
 	// AndroidCertSHA256 lists the release-key fingerprints served in
 	// /.well-known/assetlinks.json so Android opens invite links in the app.
 	AndroidCertSHA256 []string
-	MaxBlobBytes      int64
+	// AppleAppIDs lists the iOS app IDs (TeamID.bundleID) served in
+	// /.well-known/apple-app-site-association so iOS opens invite links in
+	// the app.
+	AppleAppIDs  []string
+	MaxBlobBytes int64
 	// TrustProxy keys rate limits on the rightmost X-Forwarded-For entry of
 	// requests arriving over loopback (Pangolin/newt, cloudflared). See
 	// api.clientIP.
@@ -41,6 +45,7 @@ func Load() Config {
 		BlobDir:            filepath.Join(dataDir, "blobs"),
 		PublicOrigin:       strings.TrimRight(os.Getenv("SUPERCHAT_PUBLIC_ORIGIN"), "/"),
 		AndroidCertSHA256:  splitList(os.Getenv("SUPERCHAT_ANDROID_CERT_SHA256")),
+		AppleAppIDs:        splitList(os.Getenv("SUPERCHAT_APPLE_APP_IDS")),
 		MaxBlobBytes:       int64(maxMB) << 20,
 		TrustProxy:         os.Getenv("SUPERCHAT_TRUST_PROXY") == "1",
 		StaticDir:          os.Getenv("SUPERCHAT_STATIC_DIR"),

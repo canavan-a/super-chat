@@ -24,6 +24,22 @@ themes, notifications and boot screen, and a sideloaded Android APK.
 - **Your own server, if you want.** `chat.superbadger.io` is the default; anyone
   can run the server (a single Go binary on SQLite) and add it in Settings.
 
+## Download
+
+- **Google Play:** [Super Chat on Google Play](https://play.google.com/store/apps/details?id=com.superchatapp).
+  Notifications come through Firebase Cloud Messaging; a wake-up carries
+  nothing but a room topic, and the app fetches and decrypts the messages
+  itself.
+- **Sideload the APK:** grab `superchat-app-v*.apk` from the
+  [latest release](https://github.com/canavan-a/super-chat/releases/latest)
+  and open it on your phone (allow installs from your browser or file manager
+  when Android asks). This build has no Google services at all: it keeps its
+  own background connection for notifications and updates itself from
+  Settings → App updates.
+
+The two are signed differently, so switching between them means uninstalling
+first. Back up your recovery phrase or key file before you do.
+
 ## How the encryption works
 
 Full details are in [`docs/protocol.md`](docs/protocol.md). In short:

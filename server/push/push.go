@@ -18,6 +18,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -117,6 +118,26 @@ func (f *FCM) send(room string) {
 				// One wake-up per room waiting at a time is enough.
 				"collapse_key": topic,
 				"ttl":          "600s",
+			},
+			// iPhones: iOS won't reliably wake a closed app to fetch and
+			// decrypt, so APNs shows a plain alert itself, the same for
+			// every room. "t" lets the open app catch up on that room
+			// instead (app/ios/SuperchatApp/PushModule.m).
+			"apns": map[string]any{
+				"headers": map[string]string{
+					"apns-priority":    "10",
+					"apns-push-type":   "alert",
+					"apns-collapse-id": topic,
+					"apns-expiration":  strconv.FormatInt(f.now().Add(10*time.Minute).Unix(), 10),
+				},
+				"payload": map[string]any{
+					"aps": map[string]any{
+						"alert":     map[string]string{"title": "Super Chat", "body": "New message"},
+						"sound":     "default",
+						"thread-id": "sc-wake",
+					},
+					"t": topic,
+				},
 			},
 		},
 	})

@@ -1,7 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './src/App';
-import {PrivacyPolicy} from './src/privacy/PrivacyPolicy';
+import {PrivacyPolicy, TermsOfUse} from './src/privacy/PrivacyPolicy';
 import {ThemeProvider} from './src/theme';
 
 const root = document.getElementById('root');
@@ -9,18 +9,19 @@ if (!root) {
   throw new Error('missing #root element');
 }
 
-// /privacy is the privacy policy as a page of its own (linked from app
-// stores), readable without an account or unlocking anything.
-const isPrivacyPage =
-  window.location.pathname.replace(/\/+$/, '') === '/privacy';
-if (isPrivacyPage) document.title = 'Privacy policy · Super Chat';
+// /privacy and /terms are the privacy policy and terms of use as pages of
+// their own (linked from app stores), readable without an account or
+// unlocking anything.
+const path = window.location.pathname.replace(/\/+$/, '');
+const page =
+  path === '/privacy' ? (
+    <PrivacyPolicy />
+  ) : path === '/terms' ? (
+    <TermsOfUse />
+  ) : null;
+if (path === '/privacy') document.title = 'Privacy policy · Super Chat';
+if (path === '/terms') document.title = 'Terms of use · Super Chat';
 
 ReactDOM.createRoot(root).render(
-  isPrivacyPage ? (
-    <ThemeProvider>
-      <PrivacyPolicy />
-    </ThemeProvider>
-  ) : (
-    <App />
-  ),
+  page ? <ThemeProvider>{page}</ThemeProvider> : <App />,
 );

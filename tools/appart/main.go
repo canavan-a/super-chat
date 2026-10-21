@@ -181,7 +181,7 @@ func main() {
 	artDir := flag.String("art", "../art", "the art directory")
 	app := flag.String("app", "../app", "the app directory")
 	preview := flag.String("preview", "", "also render PNG previews into this directory")
-	market := flag.String("marketplace", "", "also render the Google Play store icon and feature graphic into this directory")
+	market := flag.String("marketplace", "", "also render the Google Play and App Store graphics into this directory")
 	readme := flag.String("readme", "", "also render the wordmark as light and dark SVGs for the README into this directory")
 	flag.Parse()
 

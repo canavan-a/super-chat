@@ -2,7 +2,7 @@
 // screens) and as its own page on the web (/privacy). Keep it in step with
 // the published copy, and update UPDATED when it changes.
 
-export const UPDATED = '2026-10-16';
+export const UPDATED = '2026-10-20';
 export const CONTACT = 'aidan@lunargen.com';
 
 /** Inline **bold** is the only markup, in paragraphs, list items and table cells. */
@@ -108,10 +108,11 @@ export const POLICY: PolicySection[] = [
       },
       {
         list: [
-          '**Google Firebase Cloud Messaging (Google Play version only).** To notify you while the app is closed, our server sends Google an empty wake-up for a room, with no message, sender or room name. Your device subscribes to rooms by a scrambled code, so our server never receives a device token. Google can see that your device was woken and when. The version installed outside Google Play does not use Google services at all.',
+          '**Google Firebase Cloud Messaging (Google Play version and iPhone app).** To notify you while the app is closed, our server sends Google an empty wake-up for a room, with no message, sender or room name. Your device subscribes to rooms by a scrambled code, so our server never receives a device token. Google can see that your device was woken and when. On iPhone, Google passes the wake-up to the **Apple Push Notification service**, which shows the same fixed "New message" alert for every room, so Apple sees when a notification arrives, never what it is about. The version installed outside Google Play does not use Google services at all.',
           "**STUN and TURN servers (voice calls).** These help devices connect for voice. They see your IP address while you are in a call, never what is said, since calls are end-to-end encrypted. The app starts with Google's public STUN server, which you can remove; you choose any others in Settings → Voice.",
           '**People in your voice calls** may see your IP address unless you turn on "Relay all voice", which routes calls through a TURN relay.',
           "**Google Play** handles downloads and updates of the Google Play version under Google's own privacy policy.",
+          "**The App Store** handles downloads and updates of the iPhone app under Apple's own privacy policy.",
         ],
       },
     ],
@@ -125,13 +126,14 @@ export const POLICY: PolicySection[] = [
       {
         list: [
           '**Android:** the key is kept in the Android Keystore, unlocked by your fingerprint or screen lock.',
+          '**iPhone:** the key is kept in the iOS Keychain, only on this device, unlocked by Face ID or your passcode.',
           "**Web:** the key is kept in your browser's storage, encrypted with your passphrase.",
           '**Recovery phrase:** the 24 words shown at setup are the only way to restore your account. We cannot recover it for you.',
           '**Settings and caches:** your settings (including any STUN/TURN servers and their passwords) and copies of messages and pictures stay on the device. They are never synced to our server.',
         ],
       },
       {
-        p: 'The Android app blocks screenshots and hides its contents in the recent-apps screen.',
+        p: "The Android app blocks screenshots and hides its contents in the recent-apps screen. iOS doesn't let apps block screenshots.",
       },
     ],
   },
@@ -144,8 +146,16 @@ export const POLICY: PolicySection[] = [
           "**Deleting messages:** deleting a message removes it and its files from the server for everyone. An admin can also wipe a room's whole history.",
           '**Unused files:** an uploaded file that no message uses is deleted within an hour.',
           "**Leaving a room:** you stop receiving its messages, and the room's key is changed so you can't read anything new.",
-          '**Your account:** there is nothing to delete on our side beyond the encrypted data above. Removing the app or choosing "Use a different account" erases your key from the device. Without your recovery phrase, the encrypted data left on the server can never be read again.',
+          '**Your account:** there is nothing to delete on our side beyond the encrypted data above. Removing the app or choosing "Use a different account" erases your key from the device. (On iPhone, the key is erased the next time the app is installed, since iOS keeps it until then.) Without your recovery phrase, the encrypted data left on the server can never be read again.',
         ],
+      },
+    ],
+  },
+  {
+    title: 'Reports',
+    blocks: [
+      {
+        p: 'You can report a member or a room to us by email (see the Terms of use). A report contains only what you send: the app fills in the room and the member it is about, never any messages. We use reports only to remove rooms or members that break the terms.',
       },
     ],
   },

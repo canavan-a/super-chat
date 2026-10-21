@@ -67,6 +67,17 @@ in
       '';
     };
 
+    appleAppIds = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "4W9H62B6C2.com.superchatapp" ];
+      description = ''
+        iOS app IDs (Team ID, a dot, then the bundle ID), served in
+        /.well-known/apple-app-site-association so invite links open straight
+        in the iOS app.
+      '';
+    };
+
     maxBlobMB = lib.mkOption {
       type = lib.types.ints.positive;
       default = 25;
@@ -173,6 +184,7 @@ in
         SUPERCHAT_DATA_DIR = cfg.dataDir;
         SUPERCHAT_PUBLIC_ORIGIN = cfg.publicOrigin;
         SUPERCHAT_ANDROID_CERT_SHA256 = lib.concatStringsSep "," cfg.androidCertSha256;
+        SUPERCHAT_APPLE_APP_IDS = lib.concatStringsSep "," cfg.appleAppIds;
         SUPERCHAT_MAX_BLOB_MB = toString cfg.maxBlobMB;
         SUPERCHAT_TRUST_PROXY = if cfg.trustProxy then "1" else "0";
       } // lib.optionalAttrs (cfg.fcmCredentialsFile != null) {

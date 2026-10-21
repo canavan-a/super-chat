@@ -36,7 +36,8 @@ import {DEFAULT_SERVER, normalizeServer, QUICK_REACTIONS, settingsStore} from '.
 import {getMyAvatar, resetStore, setMyAvatar, useStore} from '../store';
 import {THEME_OPTIONS, Theme, useThemeSetting} from '../theme';
 import {VoiceSettings} from '../components/VoiceSettings';
-import {PrivacyLink} from '../privacy/PrivacyPolicy';
+import {LegalLinks, PrivacyLink} from '../privacy/PrivacyPolicy';
+import {openMail, reportMailto, supportMailto} from '../privacy/contact';
 import {isSideload} from '../distribution';
 import {InstallCard} from '../components/InstallCard';
 
@@ -74,9 +75,11 @@ function withTimeout<T>(p: Promise<T>, what: string): Promise<T> {
 export function SettingsScreen({
   onForgotten,
   onOpenPrivacy,
+  onOpenTerms,
 }: {
   onForgotten: () => void;
   onOpenPrivacy?: () => void;
+  onOpenTerms?: () => void;
 }): React.JSX.Element {
   const {theme, themeName, setThemeName} = useThemeSetting();
   const styles = makeStyles(theme);
@@ -615,7 +618,7 @@ export function SettingsScreen({
                   </Pressable>
                 ))}
               </View>
-              <Text style={styles.hint}>How long Super Chat can be in the background before it asks for your fingerprint or PIN.</Text>
+              <Text style={styles.hint}>How long Super Chat can be in the background before it asks for your {Platform.OS === 'ios' ? 'Face ID or passcode' : 'fingerprint or PIN'}.</Text>
             </>
           )}
 
@@ -690,7 +693,26 @@ export function SettingsScreen({
         </>
       )}
 
-      {onOpenPrivacy ? <PrivacyLink onPress={onOpenPrivacy} /> : null}
+      <View style={styles.divider} />
+      <Text style={styles.title2}>Help</Text>
+      <Text style={styles.hint}>
+        Questions, problems, or someone breaking the rules? Reports reach us by email; we can't read your messages, so
+        tell us which room it is and what happened.
+      </Text>
+      <View style={styles.helpRow}>
+        <Pressable style={styles.testButton} onPress={() => openMail(supportMailto())}>
+          <Text style={styles.testButtonText}>Contact & support</Text>
+        </Pressable>
+        <Pressable style={styles.testButton} onPress={() => openMail(reportMailto())}>
+          <Text style={styles.testButtonText}>Report abuse</Text>
+        </Pressable>
+      </View>
+
+      {onOpenPrivacy && onOpenTerms ? (
+        <LegalLinks onTerms={onOpenTerms} onPrivacy={onOpenPrivacy} />
+      ) : onOpenPrivacy ? (
+        <PrivacyLink onPress={onOpenPrivacy} />
+      ) : null}
     </ScrollView>
     </View>
   );
@@ -851,6 +873,7 @@ function makeStyles(theme: Theme) {
       alignItems: 'center',
       gap: 10,
     },
+    helpRow: {flexDirection: 'row', flexWrap: 'wrap', gap: 8},
     testButton: {
       alignSelf: 'flex-start',
       paddingHorizontal: 14,

@@ -10,4 +10,5 @@ export type Route =
   | {name: 'join'; link?: string}
   | {name: 'settings'}
   | {name: 'voice'; key: string}
-  | {name: 'privacy'};
+  | {name: 'privacy'}
+  | {name: 'terms'};
