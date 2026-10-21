@@ -53,12 +53,17 @@ jobs:
 
   ios:
     needs: version
-    runs-on: macos-15
+    # App Store Connect only takes builds from Xcode 26 (the iOS 26 SDK) or later.
+    runs-on: macos-26
     env:
       VERSION_NAME: ${{ needs.version.outputs.name }}
       VERSION_CODE: ${{ needs.version.outputs.code }}
     steps:
       - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - run: xcodebuild -version
       - uses: actions/setup-node@v4
         with:
           # React Native 0.81 needs Node 20.19.4 or later.
