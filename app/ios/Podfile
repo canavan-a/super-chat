@@ -44,5 +44,16 @@ target 'SuperchatApp' do
       :mac_catalyst_enabled => false,
       # :ccache_enabled => true
     )
+
+    # fmt 11.0.2 (pinned by React Native 0.81) doesn't compile under Xcode
+    # 26's clang in C++20: its FMT_STRING checks are rejected as consteval
+    # errors. As C++17 it skips consteval; nothing else about it changes.
+    # Drop this once React Native ships a newer fmt.
+    installer.pods_project.targets.each do |target|
+      next unless target.name == 'fmt'
+      target.build_configurations.each do |build_config|
+        build_config.build_settings['CLANG_CXX_LANGUAGE_STANDARD'] = 'c++17'
+      end
+    end
   end
 end
