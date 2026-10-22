@@ -104,6 +104,7 @@ func (a *API) Router() *gin.Engine {
 
 	signed := v1.Group("", a.requireSignature(maxJSONBody))
 	signed.PUT("/vault/:id", a.rateLimit(a.vaultsPerIP, byIP), a.putVault)
+	signed.DELETE("/vault/:id", a.rateLimit(a.vaultsPerIP, byIP), a.deleteVault)
 	signed.POST("/rooms", a.rateLimit(a.roomsPerIP, byIP), a.createRoom)
 	signed.GET("/rooms/:id/state", a.rateLimit(a.readsPerAcct, byAcct), a.roomState)
 	signed.POST("/rooms/:id/events", a.rateLimit(a.msgsPerIP, byIP), a.rateLimit(a.msgsPerAcct, byAcct), a.appendEvents)
@@ -115,6 +116,7 @@ func (a *API) Router() *gin.Engine {
 	signed.GET("/rooms/:id/blobs/:blob", a.rateLimit(a.readsPerAcct, byAcct), a.getBlob)
 	signed.PUT("/rooms/:id/avatar", a.rateLimit(a.blobsPerAcct, byAcct), a.putAvatar)
 	signed.PUT("/rooms/:id/picture", a.rateLimit(a.blobsPerAcct, byAcct), a.putPicture)
+	signed.DELETE("/rooms/:id/mine", a.rateLimit(a.msgsPerAcct, byAcct), a.eraseMine)
 	signed.POST("/invites/:id/join", a.rateLimit(a.joinsPerIP, byIP), a.joinInvite)
 
 	blobs := v1.Group("", a.requireSignature(a.cfg.MaxBlobBytes))
@@ -620,6 +622,35 @@ func (a *API) putVault(c *gin.Context) {
 	}
 	v := database.Vault{ID: id, Pub: caller(c), Blob: req.Blob}
 	if err := a.db.Save(&v).Error; err != nil {
+		abort(c, http.StatusInternalServerError, "db error")
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// deleteVault removes the caller's room-list backup, for deleting an account.
+func (a *API) deleteVault(c *gin.Context) {
+	id := c.Param("id")
+	pub, err := proto.ParseMemberID(caller(c))
+	if err != nil || id != proto.VaultID(pub) {
+		abort(c, http.StatusForbidden, "this key can't delete that vault")
+		return
+	}
+	if err := a.db.Where("id = ?", id).Delete(&database.Vault{}).Error; err != nil {
+		abort(c, http.StatusInternalServerError, "db error")
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// eraseMine deletes everything the caller has put in a room (see
+// rooms.EraseMember). The caller stays a member until they leave.
+func (a *API) eraseMine(c *gin.Context) {
+	st, _, ok := a.member(c)
+	if !ok {
+		return
+	}
+	if err := a.rooms.EraseMember(st.Room, caller(c)); err != nil {
 		abort(c, http.StatusInternalServerError, "db error")
 		return
 	}

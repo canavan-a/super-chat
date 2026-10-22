@@ -183,6 +183,9 @@ export const api = {
     }
   },
   putVault: (server: string, k: VaultKeys, blob: string) => request<void>(server, 'PUT', `/v1/vault/${k.id}`, k.signer, {blob}),
+  deleteVault: (server: string, k: VaultKeys) => request<void>(server, 'DELETE', `/v1/vault/${k.id}`, k.signer),
+  /** Deletes everything I've put in a room: my messages, files and profile picture. */
+  eraseMine: (server: string, room: string, by: Signer) => request<void>(server, 'DELETE', `/v1/rooms/${room}/mine`, by),
   /** Marks an uploaded blob as my profile picture in this room ("" clears it). */
   setAvatar: (server: string, room: string, by: Signer, blob: string) =>
     request<void>(server, 'PUT', `/v1/rooms/${room}/avatar`, by, {blob}),

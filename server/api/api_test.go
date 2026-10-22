@@ -618,3 +618,54 @@ func TestWipe(t *testing.T) {
 		t.Fatalf("want the new message after wipe, got %d", len(msgs))
 	}
 }
+
+func TestDeleteAccount(t *testing.T) {
+	e := newEnv(t)
+	alice, bob, eve := e.user(), e.user(), e.user()
+	r := e.createRoom(alice)
+	iv, _, _ := r.invite(alice, 0, 0)
+	r.join(bob, iv, []string{alice.id})
+	r.sync()
+
+	upload := func(u *user) string {
+		code, out := u.raw("PUT", "/v1/rooms/"+r.id+"/blobs", []byte("sealed"))
+		want(t, "upload", code, 201, string(out))
+		var b struct{ ID string }
+		_ = json.Unmarshal(out, &b)
+		return b.ID
+	}
+	file, avatar := upload(bob), upload(bob)
+	code, body := bob.do("POST", "/v1/rooms/"+r.id+"/messages", map[string]any{"id": proto.NewID(), "epoch": r.ep, "kind": "msg", "ct": "x", "blobs": []string{file}})
+	want(t, "post with blob", code, 201, body)
+	code, body = bob.do("PUT", "/v1/rooms/"+r.id+"/avatar", map[string]any{"blob": avatar})
+	want(t, "set avatar", code, 204, body)
+	r.send(bob, "msg")
+	aliceMsg, _, _ := r.send(alice, "msg")
+
+	code, body = eve.do("DELETE", "/v1/rooms/"+r.id+"/mine", nil)
+	want(t, "outsider erases", code, 404, body)
+	code, body = bob.do("DELETE", "/v1/rooms/"+r.id+"/mine", nil)
+	want(t, "bob erases his data", code, 204, body)
+
+	_, msgs := r.messages(alice)
+	if len(msgs) != 1 || msgs[0].ID != aliceMsg {
+		t.Fatalf("want only alice's message left, got %v", msgs)
+	}
+	for _, b := range []string{file, avatar} {
+		code, _ = alice.raw("GET", "/v1/rooms/"+r.id+"/blobs/"+b, nil)
+		want(t, "bob's blob", code, 404, "")
+	}
+
+	// The room-list backup goes too, and only its owner can delete it.
+	pub, _ := proto.ParseMemberID(bob.id)
+	vault := "/v1/vault/" + proto.VaultID(pub)
+	code, body = bob.do("PUT", vault, map[string]string{"blob": "sealed"})
+	want(t, "write vault", code, 204, body)
+	code, body = alice.do("DELETE", vault, nil)
+	want(t, "someone else deletes the vault", code, 403, body)
+	code, body = bob.do("DELETE", vault, nil)
+	want(t, "owner deletes the vault", code, 204, body)
+	resp, _ := http.Get(e.srv.URL + vault)
+	resp.Body.Close()
+	want(t, "vault gone", resp.StatusCode, 404, "")
+}

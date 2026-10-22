@@ -1648,6 +1648,44 @@ export async function leave(key: string) {
   emit();
 }
 
+/**
+ * Deletes this account's data from every server: in each room, everything I
+ * posted (messages, files, profile picture) is erased and I leave; then the
+ * room-list backup on each server is deleted. A room that's already gone, or
+ * that I was removed from, is skipped. It stops at the first failure, and
+ * running it again finishes the rest. The caller then forgets the key on this
+ * device.
+ */
+export async function deleteAccount(): Promise<void> {
+  if (!roomsLoaded) throw new Error("Your chats are still loading. Try again in a moment.");
+  const roomServers = new Set([...rooms.values()].map(r => r.server));
+  const servers = new Set([...settingsStore.get().servers, ...roomServers]);
+  for (const r of [...rooms.values()]) {
+    try {
+      await api.eraseMine(r.server, r.id, r.me);
+      await leave(r.key);
+    } catch (e) {
+      // Only the server's own "no such room"; a server too old to know this
+      // endpoint also answers 404, and that must not count as done.
+      if (!(e instanceof ApiError && e.status === 404)) throw e;
+      if (!/no such room/.test(e.message)) throw new Error(`${r.server.replace(/^https?:\/\//, '')} doesn't support deleting accounts yet.`);
+      forgetRoom(r.key);
+    }
+  }
+  // Leaving queued backup writes; the backups are about to go instead.
+  for (const t of vaultTimers.values()) clearTimeout(t);
+  vaultTimers.clear();
+  for (const server of servers) {
+    try {
+      await api.deleteVault(server, vaultKeys(account().entropy, server));
+    } catch (e) {
+      // A saved server I never had a room on may be gone for good; one I did
+      // have rooms on must confirm.
+      if (roomServers.has(server)) throw e;
+    }
+  }
+}
+
 export const setRetention = (key: string, retentionDays: number) =>
   append(rooms.get(key)!, () => ({events: [{kind: 'settings', pub: {retentionDays}}]}));
 

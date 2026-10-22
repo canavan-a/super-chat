@@ -400,3 +400,35 @@ func (s *Service) DeleteRoom(room string) error {
 	s.Forget(room)
 	return nil
 }
+
+// EraseMember deletes everything a member has put in a room: their messages
+// (and with them their reactions and receipts), every blob they uploaded, and
+// their profile picture. It's the first half of deleting an account; leaving
+// the room is the second. Other members are told which messages went.
+func (s *Service) EraseMember(room, member string) error {
+	unlock := s.lock(room)
+	defer unlock()
+	var msgIDs, blobIDs []string
+	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&database.Message{}).Where("room_id = ? AND sender = ?", room, member).Pluck("id", &msgIDs).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&database.Blob{}).
+			Where("room_id = ? AND (uploader = ? OR message_id IN ?)", room, member, msgIDs).
+			Pluck("id", &blobIDs).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("id IN ?", blobIDs).Delete(&database.Blob{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("room_id = ? AND sender = ?", room, member).Delete(&database.Message{}).Error
+	})
+	if err != nil {
+		return err
+	}
+	s.RemoveBlobFiles(blobIDs)
+	if len(msgIDs) > 0 && s.OnDeleted != nil {
+		s.OnDeleted(room, msgIDs)
+	}
+	return nil
+}

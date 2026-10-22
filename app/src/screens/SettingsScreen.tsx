@@ -33,7 +33,7 @@ import {forgetIdentity, loadIdentity, NEEDS_PASSPHRASE} from '../keystore';
 import {platformConfirm} from '../platformConfirm';
 import {session} from '../session';
 import {DEFAULT_SERVER, normalizeServer, QUICK_REACTIONS, settingsStore} from '../settings';
-import {getMyAvatar, resetStore, setMyAvatar, useStore} from '../store';
+import {deleteAccount, getMyAvatar, resetStore, setMyAvatar, useStore} from '../store';
 import {THEME_OPTIONS, Theme, useThemeSetting} from '../theme';
 import {VoiceSettings} from '../components/VoiceSettings';
 import {LegalLinks, PrivacyLink} from '../privacy/PrivacyPolicy';
@@ -330,6 +330,24 @@ export function SettingsScreen({
         onForgotten();
       },
     );
+
+  const [deleteStatus, setDeleteStatus] = useState<{kind: 'working'} | {kind: 'error'; message: string} | null>(null);
+  // null while the confirmation is closed, otherwise what's been typed into it.
+  const [deleteTyped, setDeleteTyped] = useState<string | null>(null);
+  const deleteConfirmed = deleteTyped?.trim().toUpperCase() === 'DELETE';
+  const deleting = deleteStatus?.kind === 'working';
+  const deleteEverything = async () => {
+    setDeleteStatus({kind: 'working'});
+    try {
+      await deleteAccount();
+      await forgetIdentity();
+      resetStore();
+      session.clear();
+      onForgotten();
+    } catch (e) {
+      setDeleteStatus({kind: 'error', message: (e as Error).message});
+    }
+  };
 
   return (
     <View style={styles.fill}>
@@ -690,6 +708,66 @@ export function SettingsScreen({
           <Pressable style={styles.dangerButton} onPress={forget}>
             <Text style={styles.dangerText}>Remove account from this device</Text>
           </Pressable>
+          <Text style={styles.hint}>
+            Keeps your chats on the server: you can come back with your recovery phrase or key file.
+          </Text>
+          {deleteTyped === null ? (
+            <>
+              <Pressable
+                style={styles.dangerButton}
+                onPress={() => {
+                  setDeleteStatus(null);
+                  setDeleteTyped('');
+                }}
+                accessibilityRole="button">
+                <Text style={styles.dangerText}>Delete account</Text>
+              </Pressable>
+              <Text style={styles.hint}>
+                Deletes everything you've posted, leaves every chat and removes your account for good.
+              </Text>
+            </>
+          ) : (
+            <View style={styles.deleteConfirm}>
+              <Text style={styles.title2}>Delete your account?</Text>
+              <Text style={styles.hint}>
+                Everything you've posted is deleted from the server: your messages, files and profile pictures in
+                every chat. You leave every chat, the backup of your chat list is deleted, and your key is removed
+                from this device. This can't be undone, and your recovery phrase won't bring anything back.
+              </Text>
+              <Text style={styles.hint}>Type DELETE to confirm.</Text>
+              <TextInput
+                style={styles.input}
+                value={deleteTyped}
+                onChangeText={setDeleteTyped}
+                placeholder="DELETE"
+                placeholderTextColor={theme.textMuted}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                editable={!deleting}
+                accessibilityLabel="Type DELETE to confirm"
+              />
+              <Pressable
+                style={[styles.dangerButton, (!deleteConfirmed || deleting) && styles.buttonDisabled]}
+                onPress={deleteEverything}
+                disabled={!deleteConfirmed || deleting}
+                accessibilityRole="button"
+                accessibilityState={{disabled: !deleteConfirmed || deleting}}>
+                <Text style={styles.dangerText}>{deleting ? 'Deleting account…' : 'Delete my account forever'}</Text>
+              </Pressable>
+              <Pressable
+                style={styles.button}
+                onPress={() => setDeleteTyped(null)}
+                disabled={deleting}
+                accessibilityRole="button">
+                <Text style={styles.buttonText}>Cancel</Text>
+              </Pressable>
+            </View>
+          )}
+          {deleteStatus?.kind === 'error' && (
+            <Notice kind="error" title="Your account wasn't fully deleted">
+              {deleteStatus.message} Try again; whatever was already deleted stays deleted.
+            </Notice>
+          )}
         </>
       )}
 
@@ -974,6 +1052,10 @@ function makeStyles(theme: Theme) {
     dangerText: {
       color: theme.danger,
       fontWeight: '700',
+    },
+    deleteConfirm: {
+      gap: 10,
+      marginBottom: 20,
     },
   });
 }

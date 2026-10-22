@@ -2,7 +2,7 @@
 // screens) and as its own page on the web (/privacy). Keep it in step with
 // the published copy, and update UPDATED when it changes.
 
-export const UPDATED = '2026-10-20';
+export const UPDATED = '2026-10-22';
 export const CONTACT = 'aidan@lunargen.com';
 
 /** Inline **bold** is the only markup, in paragraphs, list items and table cells. */
@@ -146,7 +146,7 @@ export const POLICY: PolicySection[] = [
           "**Deleting messages:** deleting a message removes it and its files from the server for everyone. An admin can also wipe a room's whole history.",
           '**Unused files:** an uploaded file that no message uses is deleted within an hour.',
           "**Leaving a room:** you stop receiving its messages, and the room's key is changed so you can't read anything new.",
-          '**Your account:** there is nothing to delete on our side beyond the encrypted data above. Removing the app or choosing "Use a different account" erases your key from the device. (On iPhone, the key is erased the next time the app is installed, since iOS keeps it until then.) Without your recovery phrase, the encrypted data left on the server can never be read again.',
+          '**Deleting your account:** Settings → Account → Delete account erases everything you posted from the server (your messages, files and profile pictures in every room), takes you out of every room, deletes the backup of your room list, and removes your key from the device. Removing the app or choosing "Use a different account" erases your key from the device. (On iPhone, the key is erased the next time the app is installed, since iOS keeps it until then.) Without your recovery phrase, the encrypted data left on the server can never be read again.',
         ],
       },
     ],
