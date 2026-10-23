@@ -1,6 +1,6 @@
-// Key-file scrypt. On Android it runs natively off the JS thread (Scrypt.java):
-// in Hermes the key file's 2^15 cost took seconds and froze every button
-// while it ran. Same algorithm and output either way, so existing key files
+// Key-file scrypt. On Android and iOS it runs natively off the JS thread
+// (Scrypt.java, ScryptModule.m): in Hermes the key file's 2^15 cost took
+// seconds and froze every button, spinner included, while it ran. Same algorithm and output either way, so existing key files
 // open unchanged. Falls back to @noble/hashes where the module isn't there
 // (tests; kdf.web.ts covers the browser).
 import {NativeModules} from 'react-native';

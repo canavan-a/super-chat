@@ -12,6 +12,7 @@
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
 		A1C0DE00000000000000A002 /* ImageCropModule.m in Sources */ = {isa = PBXBuildFile; fileRef = A1C0DE00000000000000A001 /* ImageCropModule.m */; };
 		A1C0DE00000000000000A005 /* PushModule.m in Sources */ = {isa = PBXBuildFile; fileRef = A1C0DE00000000000000A004 /* PushModule.m */; };
+		A1C0DE00000000000000A00A /* ScryptModule.m in Sources */ = {isa = PBXBuildFile; fileRef = A1C0DE00000000000000A009 /* ScryptModule.m */; };
 		A1C0DE00000000000000A007 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = A1C0DE00000000000000A006 /* GoogleService-Info.plist */; };
 		A1C0DE00000000000000A008 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
@@ -28,6 +29,7 @@
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = SuperchatApp/AppDelegate.swift; sourceTree = "<group>"; };
 		A1C0DE00000000000000A001 /* ImageCropModule.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = ImageCropModule.m; path = SuperchatApp/ImageCropModule.m; sourceTree = "<group>"; };
 		A1C0DE00000000000000A004 /* PushModule.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = PushModule.m; path = SuperchatApp/PushModule.m; sourceTree = "<group>"; };
+		A1C0DE00000000000000A009 /* ScryptModule.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = ScryptModule.m; path = SuperchatApp/ScryptModule.m; sourceTree = "<group>"; };
 		A1C0DE00000000000000A006 /* GoogleService-Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = "GoogleService-Info.plist"; path = "SuperchatApp/GoogleService-Info.plist"; sourceTree = "<group>"; };
 		A1C0DE00000000000000A003 /* SuperchatApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = SuperchatApp.entitlements; path = SuperchatApp/SuperchatApp.entitlements; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = SuperchatApp/LaunchScreen.storyboard; sourceTree = "<group>"; };
@@ -53,6 +55,7 @@
 				761780EC2CA45674006654EE /* AppDelegate.swift */,
 				A1C0DE00000000000000A001 /* ImageCropModule.m */,
 				A1C0DE00000000000000A004 /* PushModule.m */,
+				A1C0DE00000000000000A009 /* ScryptModule.m */,
 				A1C0DE00000000000000A006 /* GoogleService-Info.plist */,
 				A1C0DE00000000000000A003 /* SuperchatApp.entitlements */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
@@ -261,6 +264,7 @@
 				761780ED2CA45674006654EE /* AppDelegate.swift in Sources */,
 				A1C0DE00000000000000A002 /* ImageCropModule.m in Sources */,
 				A1C0DE00000000000000A005 /* PushModule.m in Sources */,
+				A1C0DE00000000000000A00A /* ScryptModule.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
