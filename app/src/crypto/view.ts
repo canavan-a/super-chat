@@ -1,6 +1,6 @@
 // Turns a verified log plus whatever epoch keys we hold into what the UI
 // shows: room name and color, members with roles and display names, invites.
-import {applyEvent, LogState, newState, openEnc, parseEvent, ParsedEvent, Role, SignedEvent} from './log';
+import {applyEvent, cloneState, LogState, newState, openEnc, parseEvent, ParsedEvent, Role, SignedEvent} from './log';
 
 export interface MemberView {
   id: string;
@@ -77,6 +77,34 @@ export function replay(room: string, events: SignedEvent[]): ReplayResult {
     applyEvent(state, e);
     if (e.kind === 'epoch') commits[e.pub.epoch] = e.pub.commit;
     parsed.push(e);
+  }
+  return {state, events: parsed, commits};
+}
+
+/**
+ * Replays events on top of a log already verified (or from the start, given
+ * null), checking each one exactly as replay does: the same result as
+ * replaying everything, without re-verifying what was verified before.
+ * Events the log already has are skipped. pause, if given, runs every so
+ * often, to hand the JS thread back during a long log.
+ */
+export async function extendReplay(
+  room: string,
+  base: ReplayResult | null,
+  events: SignedEvent[],
+  pause?: () => Promise<void>,
+): Promise<ReplayResult> {
+  const state = base ? cloneState(base.state) : newState(room);
+  const parsed: ParsedEvent[] = base ? [...base.events] : [];
+  const commits: Record<number, string> = base ? {...base.commits} : {};
+  let n = 0;
+  for (const se of events) {
+    const e = parseEvent(se);
+    if (e.seq < state.nextSeq) continue;
+    applyEvent(state, e);
+    if (e.kind === 'epoch') commits[e.pub.epoch] = e.pub.commit;
+    parsed.push(e);
+    if (pause && ++n % 32 === 0) await pause();
   }
   return {state, events: parsed, commits};
 }

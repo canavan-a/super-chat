@@ -34,6 +34,16 @@ func Topic(room string) string {
 	return "sc-" + base64.RawURLEncoding.EncodeToString(sum[:16])
 }
 
+// Expiry is how long FCM and APNs keep trying to deliver a wake-up to a
+// device that's off or out of signal. Long enough to cover a restart or a
+// commute; the collapse keys mean only the newest per room is kept anyway.
+const Expiry = time.Hour
+
+var ttl = strconv.Itoa(int(Expiry.Seconds())) + "s"
+
+// sendTries is how many times a send is tried before it's given up.
+const sendTries = 3
+
 // Window is the shortest gap between two wake-ups for one room. Messages in
 // between are covered by one trailing wake-up at the window's end: a woken
 // device fetches everything new anyway.
@@ -45,6 +55,8 @@ type FCM struct {
 	client  *http.Client
 	// endpoint is FCM's send URL; tests point it elsewhere.
 	endpoint string
+	// retryWait is the wait before the first retry (doubling after); tests shorten it.
+	retryWait time.Duration
 
 	mu      sync.Mutex
 	last    map[string]time.Time
@@ -70,12 +82,13 @@ func New(credentialsJSON []byte) (*FCM, error) {
 func newFCM(project string, client *http.Client) *FCM {
 	client.Timeout = 10 * time.Second
 	return &FCM{
-		project:  project,
-		client:   client,
-		endpoint: "https://fcm.googleapis.com/v1/projects/" + project + "/messages:send",
-		last:     map[string]time.Time{},
-		pending:  map[string]bool{},
-		now:      time.Now,
+		project:   project,
+		client:    client,
+		endpoint:  "https://fcm.googleapis.com/v1/projects/" + project + "/messages:send",
+		retryWait: time.Second,
+		last:      map[string]time.Time{},
+		pending:   map[string]bool{},
+		now:       time.Now,
 	}
 }
 
@@ -117,7 +130,7 @@ func (f *FCM) send(room string) {
 				"priority": "HIGH",
 				// One wake-up per room waiting at a time is enough.
 				"collapse_key": topic,
-				"ttl":          "600s",
+				"ttl":          ttl,
 			},
 			// iPhones: iOS won't reliably wake a closed app to fetch and
 			// decrypt, so APNs shows a plain alert itself, the same for
@@ -128,7 +141,7 @@ func (f *FCM) send(room string) {
 					"apns-priority":    "10",
 					"apns-push-type":   "alert",
 					"apns-collapse-id": topic,
-					"apns-expiration":  strconv.FormatInt(f.now().Add(10*time.Minute).Unix(), 10),
+					"apns-expiration":  strconv.FormatInt(f.now().Add(Expiry).Unix(), 10),
 				},
 				"payload": map[string]any{
 					"aps": map[string]any{
@@ -141,16 +154,41 @@ func (f *FCM) send(room string) {
 			},
 		},
 	})
+	wait := f.retryWait
+	for try := 1; ; try++ {
+		retry, after := f.post(body)
+		if !retry || try == sendTries {
+			return
+		}
+		if after > 0 {
+			wait = after
+		}
+		time.Sleep(wait)
+		wait *= 2
+	}
+}
+
+// post sends once. It says whether it's worth trying again (no answer, too
+// many requests, or a server error) and how long FCM asked to wait, if it did.
+func (f *FCM) post(body []byte) (retry bool, after time.Duration) {
 	resp, err := f.client.Post(f.endpoint, "application/json", bytes.NewReader(body))
 	if err != nil {
 		log.Printf("push: %v", err)
-		return
+		return true, 0
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		log.Printf("push: FCM %d: %s", resp.StatusCode, bytes.TrimSpace(msg))
+	if resp.StatusCode == http.StatusOK {
+		return false, 0
 	}
+	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	log.Printf("push: FCM %d: %s", resp.StatusCode, bytes.TrimSpace(msg))
+	if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500 {
+		return false, 0
+	}
+	if s, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && s > 0 {
+		after = min(time.Duration(s)*time.Second, time.Minute)
+	}
+	return true, after
 }
 
 // NewWithEndpoint sends to endpoint instead of FCM (tests).

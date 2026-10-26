@@ -21,6 +21,10 @@ interface PushNative {
   subscribe(topic: string): Promise<void>;
   unsubscribe(topic: string): Promise<void>;
   clearLocked(): void;
+  /** Android only. */
+  showLocked?(): void;
+  /** Android only: whether wake-ups come to JS (see SuperChatMessagingService). */
+  setListening?(on: boolean): void;
 }
 
 const Native = NativeModules.Push as PushNative | undefined;
@@ -54,13 +58,21 @@ export async function startPush(): Promise<void> {
       if (e?.topic) onWake(e.topic).catch(() => {});
     },
   );
+  Native.setListening?.(true);
   subscribe(scheduleSync);
   scheduleSync();
 }
 
 async function onWake(topic: string) {
   const room = roomList().find(r => roomTopic(r.id) === topic);
-  if (room) await catchUp(room.key);
+  try {
+    if (!room) throw new Error('no such room here');
+    await catchUp(room.key);
+  } catch {
+    // Couldn't fetch it (offline just after waking, say): rather than
+    // nothing, the plain "New message" (Android; iOS showed its own).
+    Native?.showLocked?.();
+  }
 }
 
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
@@ -74,7 +86,29 @@ function scheduleSync() {
   }, SYNC_DELAY_MS);
 }
 
-/** Subscribe to the topics of rooms we're in; unsubscribe from rooms we've left. */
+/** A subscribe or unsubscribe that hasn't answered by then counts as failed (the next sync retries). */
+const TOPIC_CALL_TIMEOUT_MS = 10_000;
+/** How often every topic is subscribed again, whatever the list says. */
+const RESUBSCRIBE_EVERY_MS = 24 * 3600_000;
+let lastFullSync = 0;
+
+function withTimeout(p: Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<void>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error('timed out')),
+      TOPIC_CALL_TIMEOUT_MS,
+    );
+  });
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Subscribe to the topics of rooms we're in; unsubscribe from rooms we've
+ * left. Once a launch (and daily) it subscribes to every one again, whatever
+ * the saved list says: FCM forgets them when it resets this device's
+ * registration, and the list wouldn't know.
+ */
 export async function syncTopics(): Promise<void> {
   if (!Native) return;
   const want = new Set(roomList().map(r => roomTopic(r.id)));
@@ -82,23 +116,35 @@ export async function syncTopics(): Promise<void> {
   try {
     have = JSON.parse((await AsyncStorage.getItem(SUBSCRIBED_KEY)) ?? '[]');
   } catch {}
+  const full = Date.now() - lastFullSync > RESUBSCRIBE_EVERY_MS;
   const now = new Set(have);
-  for (const t of want) {
-    if (now.has(t)) continue;
-    try {
-      await Native.subscribe(t);
-      now.add(t);
-    } catch {
-      // offline or Play services busy: the next sync retries
-    }
-  }
-  for (const t of have) {
-    if (want.has(t)) continue;
-    try {
-      await Native.unsubscribe(t);
-      now.delete(t);
-    } catch {}
-  }
+  let failed = false;
+  await Promise.all([
+    ...[...want]
+      .filter(t => full || !now.has(t))
+      .map(t =>
+        withTimeout(Native.subscribe(t)).then(
+          () => {
+            now.add(t);
+          },
+          // offline or Play services busy: the next sync retries
+          () => {
+            failed = true;
+          },
+        ),
+      ),
+    ...have
+      .filter(t => !want.has(t))
+      .map(t =>
+        withTimeout(Native.unsubscribe(t)).then(
+          () => {
+            now.delete(t);
+          },
+          () => {},
+        ),
+      ),
+  ]);
+  if (full && !failed) lastFullSync = Date.now();
   await AsyncStorage.setItem(SUBSCRIBED_KEY, JSON.stringify([...now])).catch(
     () => {},
   );

@@ -13,6 +13,7 @@ import {
   encryptBlob,
   encryptMessage,
   entropyFromPhrase,
+  extendReplay,
   exportKeyFile,
   identityFromEntropy,
   importKeyFile,
@@ -151,7 +152,7 @@ describe('room log', () => {
     expect(() => buildEvents(ghost, r.state, [{kind: 'join', pub: {invite: 'AAAAAAAAAAAAAAAAAAAAAA', proof: 'x'}}])).toThrow();
   });
 
-  it('lets an invited account join, and only from that point on', () => {
+  it('lets an invited account join, and only from that point on', async () => {
     const {alice, created, r} = setupRoom();
     const k1 = openEnvelope(alice, created.room, 1, created.batch.envelopes![alice.id], r.commits[1]);
 
@@ -197,6 +198,12 @@ describe('room log', () => {
     // known once he's gone.
     const left = buildEvents(bob, after.state, [{kind: 'leave'}]);
     const gone = replay(created.room, [...all, ...left.signed]);
+    // Replaying only what's new on top of a verified log gives the same as
+    // replaying it all; events already held are skipped.
+    const stepped = await extendReplay(created.room, await extendReplay(created.room, afterInvite, join.batch.events), left.signed);
+    expect(stepped).toEqual(gone);
+    expect(await extendReplay(created.room, after, all)).toEqual(after);
+    expect(await extendReplay(created.room, null, [...all, ...left.signed], async () => {})).toEqual(gone);
     const goneView = roomView(gone, {1: k1, 2: k2});
     expect(goneView.activity.map(a => [a.kind, a.member])).toEqual([
       ['join', bob.id],

@@ -1,13 +1,16 @@
 package proto
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 // Roles.
@@ -60,7 +63,7 @@ func ParseEvent(se SignedEvent) (*Event, error) {
 		return nil, errors.New("event sig is not b64")
 	}
 	var b EventBody
-	if err := json.Unmarshal(raw, &b); err != nil {
+	if err := strictUnmarshal(raw, &b); err != nil {
 		return nil, fmt.Errorf("event body: %w", err)
 	}
 	if b.V != 1 {
@@ -390,7 +393,68 @@ func decode(raw json.RawMessage, v any) error {
 	if len(raw) == 0 {
 		raw = []byte("{}")
 	}
+	return strictUnmarshal(raw, v)
+}
+
+// strictUnmarshal is json.Unmarshal into a struct, refusing JSON that clients
+// would read differently. Go matches keys case-insensitively and JS doesn't,
+// so {"kind":"promote","Kind":"profile"} is a profile to the server and a
+// promotion to every client: a member could get an event accepted here that
+// no client can replay, breaking the room for good. So every key must match a
+// field exactly or not at all, and none may repeat.
+func strictUnmarshal(raw []byte, v any) error {
+	if err := checkKeys(raw, jsonFields(v)); err != nil {
+		return err
+	}
 	return json.Unmarshal(raw, v)
+}
+
+// jsonFields is the set of JSON names of the struct v points to.
+func jsonFields(v any) []string {
+	t := reflect.TypeOf(v).Elem()
+	var names []string
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if f.Anonymous {
+			continue
+		}
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "" {
+			name = f.Name
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
+// checkKeys checks the keys of the top-level object in raw against fields.
+func checkKeys(raw []byte, fields []string) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return errors.New("not a JSON object")
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key := tok.(string)
+		if seen[key] {
+			return fmt.Errorf("duplicate key %q", key)
+		}
+		seen[key] = true
+		for _, f := range fields {
+			if key != f && strings.EqualFold(key, f) {
+				return fmt.Errorf("key %q must be spelled %q", key, f)
+			}
+		}
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // EpochCommit is sha256("sc-commit|room|n|" ‖ key).

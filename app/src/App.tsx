@@ -49,7 +49,7 @@ import {VoiceScreen} from './screens/VoiceScreen';
 import {VoiceBar} from './components/VoiceBar';
 import {session} from './session';
 import {settingsStore} from './settings';
-import {getRoom, isServerOnline, refreshRooms, resetStore, roomList, roomsReady, useStore} from './store';
+import {getRoom, isServerOnline, refreshAll, refreshRooms, resetStore, roomList, roomsReady, useStore} from './store';
 import {Theme, ThemeProvider, useTheme} from './theme';
 
 const TITLES: Record<Route['name'], string> = {
@@ -124,7 +124,9 @@ function AccountGate(): React.JSX.Element {
   const unlocked = useCallback((entropy: Uint8Array) => {
     session.unlock(entropy);
     setGate('ready');
-    refreshRooms().catch(() => {});
+    // The keys stayed in memory while locked, and so did the rooms: after an
+    // unlock only catch up, rather than reload every room's log.
+    (roomsReady() ? refreshAll() : refreshRooms()).catch(() => {});
   }, []);
 
   if (gate === 'loading') {

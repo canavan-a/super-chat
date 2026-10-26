@@ -50,6 +50,8 @@ import {
   openRoom,
   peekImage,
   react,
+  retryUpload,
+  discardUpload,
   unreact,
   Room,
   roomsReady,
@@ -82,9 +84,6 @@ export function RoomScreen({
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
-  const [sending, setSending] = useState(false);
-  /** What an attachment upload is doing, shown above the composer. */
-  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const lastTyping = useRef(0);
 
   useEffect(() => {
@@ -157,24 +156,15 @@ export function RoomScreen({
       setError(`${tooBig.name} is over 24 MB.`);
       return;
     }
-    // The caption and reply go with the files; clear them now so the composer
-    // is free while the upload runs (and put them back if it fails).
+    // The caption and reply go with the files. The message shows in the chat
+    // straight away and uploads from there (store.sendFiles), whatever screen
+    // is showing; if it fails, its bubble says so and offers to retry.
     const caption = draft.trim();
     const reply = replyTo;
     setDraft('');
     setReplyTo(null);
-    setSending(true);
-    try {
-      await sendFiles(roomKey, files, caption, reply?.id, setUploadStatus);
-      setError(null);
-    } catch (e) {
-      setDraft(d => d || caption);
-      setReplyTo(r => r ?? reply);
-      setError(`Couldn't send: ${(e as Error).message}`);
-    } finally {
-      setSending(false);
-      setUploadStatus(null);
-    }
+    setError(null);
+    sendFiles(roomKey, files, caption, reply?.id).catch(() => {});
   };
 
   const onChangeDraft = (t: string) => {
@@ -253,18 +243,9 @@ export function RoomScreen({
         </View>
       )}
 
-      {uploadStatus && (
-        <View style={styles.uploadRow}>
-          <ActivityIndicator size="small" color={theme.textMuted} />
-          <Text style={styles.uploadText} numberOfLines={1}>
-            {uploadStatus}
-          </Text>
-        </View>
-      )}
-
       <View style={styles.composer}>
-        <Pressable style={styles.attachButton} onPress={() => setAttachOpen(true)} accessibilityLabel="Attach" disabled={sending}>
-          {sending ? <ActivityIndicator color={theme.text} /> : <Icon name="attach" size={18} color={theme.text} />}
+        <Pressable style={styles.attachButton} onPress={() => setAttachOpen(true)} accessibilityLabel="Attach">
+          <Icon name="attach" size={18} color={theme.text} />
         </Pressable>
         <TextInput
           style={styles.composerInput}
@@ -995,12 +976,13 @@ const MessageRow = React.memo(function MessageRow({
             )}
             {!c && <Text style={[styles.brokenText, {color: textColor}]}>🔒 {msg.error ?? 'Encrypted message'}</Text>}
             {c?.t === 'file' &&
-              c.files.map(f =>
+              c.files.map((f, i) =>
                 f.mime.startsWith('image/') ? (
                   <ImageAttachment
                     key={f.blob}
                     roomKey={roomKey}
                     file={f}
+                    progress={msg.upload && !msg.upload.failed ? msg.upload.progress[i] : undefined}
                     styles={styles}
                     theme={theme}
                     onOpen={onOpenImage}
@@ -1046,16 +1028,36 @@ const MessageRow = React.memo(function MessageRow({
             </Pressable>
           )}
         </View>
-        {(lastInGroup || msg.pending) && <Text style={styles.time}>{msg.pending ? 'sending…' : time}</Text>}
+        {msg.upload?.failed ? (
+          <View style={styles.notSentRow}>
+            <Text style={styles.notSent}>Not sent</Text>
+            <Pressable onPress={() => retryUpload(msg.id).catch(() => {})} hitSlop={8} accessibilityRole="button">
+              <Text style={styles.notSentAction}>Retry</Text>
+            </Pressable>
+            <Pressable onPress={() => discardUpload(msg.id)} hitSlop={8} accessibilityRole="button">
+              <Text style={styles.notSentAction}>Remove</Text>
+            </Pressable>
+          </View>
+        ) : (
+          (lastInGroup || msg.pending) && (
+            <Text style={styles.time}>
+              {!msg.pending ? time : msg.upload ? `uploading ${uploadPercent(msg.upload.progress)}%` : 'sending…'}
+            </Text>
+          )
+        )}
         {seenBy && seenBy.length > 0 && <Text style={styles.seen}>Seen by {seenBy.join(', ')}</Text>}
       </View>
     </View>
   );
 });
 
+const uploadPercent = (progress: number[]) =>
+  Math.round((100 * progress.reduce((a, b) => a + b, 0)) / Math.max(1, progress.length));
+
 function ImageAttachment({
   roomKey,
   file,
+  progress,
   styles,
   theme,
   onOpen,
@@ -1064,6 +1066,8 @@ function ImageAttachment({
 }: {
   roomKey: string;
   file: FileRef;
+  /** While it's being sent: how much has uploaded (0–1). */
+  progress?: number;
   styles: Styles;
   theme: Theme;
   onOpen: (v: {uri: string; ref: FileRef}) => void;
@@ -1074,6 +1078,8 @@ function ImageAttachment({
   // Straight from memory when it's been shown before: no spinner, no reload.
   const [img, setImg] = useState<ShownImage | null>(() => peekImage(file));
   const [failed, setFailed] = useState(false);
+  // Bumped by tapping "Image unavailable", to try again.
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (img) return;
     let live = true;
@@ -1083,10 +1089,24 @@ function ImageAttachment({
     return () => {
       live = false;
     };
+    // Keyed on the blob, not the object: the same message decrypted again
+    // (pushed, then caught up) mustn't start the load over.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomKey, file]);
+  }, [roomKey, file.blob, attempt]);
   const ratio = file.w && file.h ? file.w / file.h : 4 / 3;
-  if (failed) return <Text style={styles.brokenText}>🔒 Image unavailable</Text>;
+  if (failed) {
+    return (
+      <Pressable
+        onPress={() => {
+          setFailed(false);
+          setAttempt(a => a + 1);
+        }}
+        onLongPress={onLongPress}
+        delayLongPress={300}>
+        <Text style={styles.brokenText}>🔒 Image unavailable · Tap to retry</Text>
+      </Pressable>
+    );
+  }
   return (
     <Pressable
       onPress={() => onTap(() => img && onOpen({uri: img.uri, ref: file}))}
@@ -1097,6 +1117,12 @@ function ImageAttachment({
       ) : (
         <View style={[styles.image, styles.imageLoading, {aspectRatio: ratio}]}>
           <ActivityIndicator color={theme.textMuted} />
+        </View>
+      )}
+      {progress !== undefined && progress < 1 && (
+        <View style={styles.imageUploading} pointerEvents="none">
+          <ActivityIndicator color="#fff" />
+          <Text style={styles.imageUploadingText}>{Math.round(progress * 100)}%</Text>
         </View>
       )}
     </Pressable>
@@ -1219,6 +1245,18 @@ function makeStyles(theme: Theme) {
     quoteText: {fontSize: 12},
     image: {width: 240, maxWidth: '100%', borderRadius: 6, backgroundColor: theme.surfaceAlt},
     imageLoading: {alignItems: 'center', justifyContent: 'center'},
+    imageUploading: {
+      ...StyleSheet.absoluteFillObject,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 4,
+      backgroundColor: 'rgba(0,0,0,0.35)',
+      borderRadius: 6,
+    },
+    imageUploadingText: {color: '#fff', fontSize: 12, fontWeight: '600'},
+    notSentRow: {flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 3, marginHorizontal: 4},
+    notSent: {fontSize: 11, color: theme.danger},
+    notSentAction: {fontSize: 11, fontWeight: '600', color: theme.primary},
     fileChip: {flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 180},
     fileChipText: {flexShrink: 1},
     fileName: {fontSize: 13, fontWeight: '600'},
@@ -1253,8 +1291,6 @@ function makeStyles(theme: Theme) {
     seen: {fontSize: 10, color: theme.textMuted, marginTop: 2},
     typingRow: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingBottom: 6},
     typingText: {fontSize: 11, color: theme.textMuted, fontStyle: 'italic'},
-    uploadRow: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 6},
-    uploadText: {flex: 1, fontSize: 12, color: theme.textMuted},
     replyBar: {
       flexDirection: 'row',
       alignItems: 'center',

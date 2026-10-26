@@ -35,9 +35,9 @@ export function seal(recipientXPub: Uint8Array, msg: Uint8Array, ad: Uint8Array)
   return concat(ephPub, aeadSeal(key, msg, ad));
 }
 
-export function unseal(xPriv: Uint8Array, sealed: Uint8Array, ad: Uint8Array): Uint8Array {
+/** myPub: xPriv's public key, when the caller has it (it saves an X25519 multiplication). */
+export function unseal(xPriv: Uint8Array, sealed: Uint8Array, ad: Uint8Array, myPub = x25519.getPublicKey(xPriv)): Uint8Array {
   const ephPub = sealed.subarray(0, 32);
-  const myPub = x25519.getPublicKey(xPriv);
   const key = hkdf(x25519.getSharedSecret(xPriv, ephPub), 'sc-seal-v1', concat(ephPub, myPub));
   return aeadOpen(key, sealed.subarray(32), ad);
 }

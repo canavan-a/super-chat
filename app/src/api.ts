@@ -3,6 +3,7 @@
 // the member key for the room it's about (see memberIdentity), so the server
 // can check you belong without learning who you are or what else you're in.
 import {sha256} from '@noble/hashes/sha256';
+import {Platform} from 'react-native';
 
 import {b64, bytesToHex, newId, sign, Signer, utf8} from './crypto';
 import type {Batch, ServerMessage, SignedEvent, VaultKeys} from './crypto';
@@ -89,7 +90,10 @@ function xhr(
     if (method === 'GET') req.responseType = 'arraybuffer';
     if (onProgress) {
       const target = method === 'PUT' ? req.upload : req;
-      target.onprogress = e => e.lengthComputable && onProgress(e.loaded / e.total);
+      // Android's upload counter (React Native's ProgressRequestBody) counts
+      // every byte twice, so it runs to 2 × total: halve it there.
+      const scale = method === 'PUT' && Platform.OS === 'android' ? 2 : 1;
+      target.onprogress = e => e.lengthComputable && onProgress(Math.min(1, e.loaded / (e.total * scale)));
     }
     req.onload = () => resolve({status: req.status, data: req.response});
     req.timeout = method === 'PUT' ? UPLOAD_TIMEOUT_MS : DOWNLOAD_TIMEOUT_MS;

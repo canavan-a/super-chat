@@ -23,17 +23,29 @@ import com.google.firebase.messaging.RemoteMessage
 class SuperChatMessagingService : FirebaseMessagingService() {
   override fun onMessageReceived(message: RemoteMessage) {
     val topic = message.from?.removePrefix("/topics/") ?: return
-    val react = (application as? ReactApplication)?.reactNativeHost?.reactInstanceManager?.currentReactContext
-    if (react != null && react.hasActiveReactInstance()) {
-      val args = Arguments.createMap().apply { putString("topic", topic) }
-      react.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java).emit("PushWake", args)
-      return
+    // Only to JS that's listening (unlocked, src/push.ts): a running app
+    // still on its lock screen would drop it. Anything going wrong here
+    // still shows the plain one, rather than nothing.
+    try {
+      if (PushModule.jsListening) {
+        val react = (application as? ReactApplication)?.reactNativeHost?.reactInstanceManager?.currentReactContext
+        if (react != null && react.hasActiveReactInstance()) {
+          val args = Arguments.createMap().apply { putString("topic", topic) }
+          react.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java).emit("PushWake", args)
+          return
+        }
+      }
+    } catch (e: Exception) {
+      // fall through to the plain notification
     }
     showLocked(this)
   }
 
-  // Topic subscriptions don't need the token itself.
-  override fun onNewToken(token: String) {}
+  // A new registration (FCM rotated it, or reset it) isn't subscribed to
+  // anything: renew this device's topics. Subscriptions don't need the token itself.
+  override fun onNewToken(token: String) {
+    PushModule.resubscribeAll(this)
+  }
 
   companion object {
     // The app's messages channel (src/notifications/channels.ts). The app

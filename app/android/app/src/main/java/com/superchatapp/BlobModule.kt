@@ -10,6 +10,7 @@ import com.facebook.react.bridge.ReadableMap
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
 import java.util.concurrent.Executors
 import javax.crypto.AEADBadTagException
 
@@ -27,6 +28,9 @@ class BlobModule(private val reactContext: ReactApplicationContext) : ReactConte
   private val workers = Executors.newFixedThreadPool(3)
   private val dir by lazy { File(reactContext.filesDir, "blobs").apply { mkdirs() } }
 
+  /** Two opens of the same blob at once raced on its download: one at a time per blob (striped, so this never grows). */
+  private val locks = Array(16) { Any() }
+
   private fun fileOf(blob: String) = File(dir, blob.replace(Regex("[^A-Za-z0-9_-]"), "_"))
 
   /**
@@ -43,24 +47,7 @@ class BlobModule(private val reactContext: ReactApplicationContext) : ReactConte
     }
     workers.execute {
       try {
-        val fileKey = Base64.decode(key, Base64.DEFAULT)
-        val file = fileOf(blob)
-        var fresh = false
-        if (!file.exists()) {
-          download(url, headers, file)
-          fresh = true
-        }
-        val plain =
-            try {
-              XChaCha.open(fileKey, file.readBytes(), AD)
-            } catch (e: AEADBadTagException) {
-              // A damaged cached copy: fetch it again, once.
-              if (fresh) throw e
-              file.delete()
-              download(url, headers, file)
-              XChaCha.open(fileKey, file.readBytes(), AD)
-            }
-        file.setLastModified(System.currentTimeMillis()) // recently used, for trimming
+        val plain = synchronized(locks[(blob.hashCode() and 0x7fffffff) % locks.size]) { openLocked(blob, url, headers, key) }
         promise.resolve("data:$mime;base64," + Base64.encodeToString(plain, Base64.NO_WRAP))
       } catch (e: OutOfMemoryError) {
         promise.reject("E_BLOB", "That file is too large to show.")
@@ -68,6 +55,28 @@ class BlobModule(private val reactContext: ReactApplicationContext) : ReactConte
         promise.reject("E_BLOB", e.message ?: "Couldn't open that file.", e)
       }
     }
+  }
+
+  private fun openLocked(blob: String, url: String, headers: ReadableMap, key: String): ByteArray {
+    val fileKey = Base64.decode(key, Base64.DEFAULT)
+    val file = fileOf(blob)
+    var fresh = false
+    if (!file.exists()) {
+      download(url, headers, file)
+      fresh = true
+    }
+    val plain =
+        try {
+          XChaCha.open(fileKey, file.readBytes(), AD)
+        } catch (e: AEADBadTagException) {
+          // A damaged cached copy: fetch it again, once.
+          if (fresh) throw e
+          file.delete()
+          download(url, headers, file)
+          XChaCha.open(fileKey, file.readBytes(), AD)
+        }
+    file.setLastModified(System.currentTimeMillis()) // recently used, for trimming
+    return plain
   }
 
   private fun download(url: String, headers: ReadableMap, into: File) {
@@ -82,9 +91,14 @@ class BlobModule(private val reactContext: ReactApplicationContext) : ReactConte
       }
       val status = conn.responseCode
       if (status != 200) throw IllegalStateException(if (status == 404) "That file is gone." else "Download failed ($status).")
-      val tmp = File(into.path + ".part")
-      conn.inputStream.use { input -> tmp.outputStream().use { input.copyTo(it) } }
-      if (!tmp.renameTo(into)) throw IllegalStateException("Couldn't save the download.")
+      // Its own temporary file, whatever else is downloading.
+      val tmp = File("${into.path}.${UUID.randomUUID()}.part")
+      try {
+        conn.inputStream.use { input -> tmp.outputStream().use { input.copyTo(it) } }
+        if (!tmp.renameTo(into)) throw IllegalStateException("Couldn't save the download.")
+      } finally {
+        tmp.delete()
+      }
     } finally {
       conn.disconnect()
     }

@@ -3,6 +3,7 @@
 // room that the newest message replaces. Messages are decrypted on the
 // phone before this ever sees them; nothing goes through a push service.
 import notifee, {AndroidStyle} from '@notifee/react-native';
+import {NativeModules} from 'react-native';
 
 import {fingerprint} from '../crypto';
 import {isSideload} from '../distribution';
@@ -61,6 +62,9 @@ export async function notifyMessage(room: Room, msg: ChatMessage): Promise<void>
     ).slice(0, 300),
     at: msg.createdAt,
   };
+  // The real one replaces the plain "New message" a wake-up may have shown
+  // for it (src/push.ts), so the two don't both sit there.
+  NativeModules.Push?.clearLocked?.();
   const lines = [...(unread.get(room.key) ?? []), line].slice(-MAX_LINES);
   unread.set(room.key, lines);
   const roomName = room.view?.name ?? 'Super Chat';

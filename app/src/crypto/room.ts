@@ -56,7 +56,7 @@ export function newEpoch(
 
 /** Opens our envelope for an epoch and checks it against the signed commit. */
 export function openEnvelope(me: Member, room: string, epoch: number, sealed: string, commit: string): Uint8Array {
-  const key = unseal(me.xPriv, unb64(sealed), envAd(room, epoch, me.id));
+  const key = unseal(me.xPriv, unb64(sealed), envAd(room, epoch, me.id), me.xPub);
   if (epochCommit(room, epoch, key) !== commit) throw new Error('epoch key does not match its commitment');
   return key;
 }

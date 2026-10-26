@@ -8,7 +8,7 @@
 // to our encrypted vault on each server (see saveVaultSoon).
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useEffect, useReducer, useRef} from 'react';
-import {NativeModules, Platform} from 'react-native';
+import {AppState, NativeModules, Platform} from 'react-native';
 import {base64} from '@scure/base';
 
 import {api, ApiError, blobRequest, downloadBlob, uploadBlob} from './api';
@@ -25,6 +25,7 @@ import {
   createInvite,
   createRoomBatch,
   decryptBlob,
+  extendReplay,
   decryptMessage,
   DecryptedMessage,
   encryptBlob,
@@ -100,6 +101,8 @@ export interface ChatMessage {
   error?: string;
   /** Local-only: still being sent. */
   pending?: boolean;
+  /** Local-only, on a file message being sent: each file's upload progress (0–1), and why it failed if it did. */
+  upload?: {progress: number[]; failed?: string};
 }
 
 export interface Room {
@@ -138,6 +141,12 @@ export interface Room {
   /** The wipe (its time) this device last handled; see dropWiped. */
   wipeSeen?: number;
   loading: boolean;
+  /** The openRoom under way, if any (one at a time). */
+  opening?: Promise<void>;
+  /** When loadState last ran: a reconnect right after it needn't reload the log. */
+  syncedAt?: number;
+  /** Its messages are last launch's (loadMessageCaches), shown until the first open replaces them. */
+  fromCache?: boolean;
   lastAt: number;
   lastPos: number;
   error: string | null;
@@ -203,7 +212,70 @@ function saveListCacheSoon() {
     listCache = rows;
     const sealed = b64(aeadSeal(listCacheKey(), utf8(JSON.stringify(rows)), LIST_CACHE_AD));
     AsyncStorage.setItem(LIST_CACHE_KEY, sealed).catch(() => {});
+    saveMessageCaches();
   }, 3000);
+}
+
+// ---- each room's newest messages, remembered between launches ----
+//
+// So a room opens straight onto what it showed last time, before any network
+// (sealed like the list cache). It's only for show: the first open replaces
+// it with the newest page from the server, which also drops anything deleted
+// meanwhile.
+
+const MSG_CACHE_PREFIX = 'superchat.msgCache.v1.';
+const MSG_CACHE_AD = utf8('sc-msg-cache');
+const MSG_CACHE_SIZE = 50;
+interface CachedMessages {
+  wipeSeen?: number;
+  messages: ChatMessage[];
+}
+const msgCacheKey = () => hkdf(account().entropy, 'superchat/msg-cache');
+const msgCacheName = (r: Room) => MSG_CACHE_PREFIX + r.key;
+/** The messages array last saved per room, to skip rooms that haven't changed. */
+const msgCacheSaved = new Map<string, ChatMessage[]>();
+
+async function loadMessageCaches(list: Room[]): Promise<void> {
+  const empty = list.filter(r => !r.messages.length);
+  if (!empty.length) return;
+  const got = await AsyncStorage.multiGet(empty.map(msgCacheName)).catch(() => []);
+  const key = msgCacheKey();
+  for (const [i, [, raw]] of got.entries()) {
+    const r = empty[i];
+    if (!raw || r.messages.length) continue;
+    try {
+      const c: CachedMessages = JSON.parse(unutf8(aeadOpen(key, unb64(raw), MSG_CACHE_AD)));
+      if (r.wipeSeen === undefined) r.wipeSeen = c.wipeSeen;
+      for (const m of c.messages) ingest(r, m);
+      r.fromCache = true;
+      msgCacheSaved.set(r.key, r.messages);
+    } catch {
+      // another account's, or damaged: the server has it all anyway
+    }
+  }
+}
+
+function saveMessageCaches() {
+  const key = msgCacheKey();
+  for (const r of rooms.values()) {
+    // Only the bottom of the chat, as loaded from the server.
+    if (r.hasNewer || r.fromCache || !r.loaded || msgCacheSaved.get(r.key) === r.messages) continue;
+    msgCacheSaved.set(r.key, r.messages);
+    const c: CachedMessages = {wipeSeen: r.wipeSeen, messages: r.messages.filter(m => !m.pending).slice(-MSG_CACHE_SIZE)};
+    AsyncStorage.setItem(msgCacheName(r), b64(aeadSeal(key, utf8(JSON.stringify(c)), MSG_CACHE_AD))).catch(() => {});
+  }
+}
+
+function forgetMessageCache(r: Room) {
+  msgCacheSaved.delete(r.key);
+  AsyncStorage.removeItem(msgCacheName(r)).catch(() => {});
+}
+
+function clearMessageCaches() {
+  msgCacheSaved.clear();
+  AsyncStorage.getAllKeys()
+    .then(keys => AsyncStorage.multiRemove(keys.filter(k => k.startsWith(MSG_CACHE_PREFIX))))
+    .catch(() => {});
 }
 
 export function subscribe(l: () => void): () => void {
@@ -384,6 +456,7 @@ function forgetRoom(key: string) {
   const r = rooms.get(key);
   if (!r) return;
   rooms.delete(key);
+  forgetMessageCache(r);
   saveLocalList();
   saveVaultSoon(r.server);
 }
@@ -392,14 +465,29 @@ function forgetRoom(key: string) {
 
 /** Fetches and verifies a room's log and our keys for it. */
 async function loadState(r: Room): Promise<void> {
-  const {events, lastPos, lastAt} = await api.state(r.server, r.id, r.me);
+  // With the log held, only what came after it: the rest was verified
+  // already, and re-checking every signature on each load is what made
+  // opening slow on long-lived rooms.
+  const base = r.log;
+  const {events, lastPos, lastAt} = await api.state(r.server, r.id, r.me, base?.state.nextSeq ?? 0);
   // Throws if the server sends anything that breaks the rules.
-  r.log = replay(r.id, events);
+  let log: ReplayResult;
+  try {
+    // From what's held now: a push may have moved it on meanwhile.
+    log = await extendReplay(r.id, r.log ?? null, events, yieldToUi);
+  } catch (e) {
+    if (!base) throw e;
+    // Didn't follow on from what's held: start over from the whole log.
+    const all = await api.state(r.server, r.id, r.me);
+    log = await extendReplay(r.id, null, all.events, yieldToUi);
+  }
+  r.log = log;
   r.lastPos = Math.max(r.lastPos, lastPos);
   r.lastAt = Math.max(r.lastAt, lastAt);
   await loadKeys(r);
   r.view = roomView(r.log, r.keys);
   r.error = null;
+  r.syncedAt = Date.now();
   // Reload after this returns: openRoom may be the caller, mid-load.
   if (dropWiped(r)) setTimeout(() => openRoom(r.key, false).catch(() => {}), 0);
 }
@@ -487,6 +575,7 @@ async function loadRooms(): Promise<void> {
   // Draw last launch's list straight away; live data fills in over it.
   await loadListCache();
   for (const [server, ids] of Object.entries(local)) for (const id of ids) ensureRoom(server, id);
+  await loadMessageCaches([...rooms.values()]);
   if (Object.keys(listCache).length) {
     roomsLoaded = true;
     emit();
@@ -503,12 +592,12 @@ async function loadRooms(): Promise<void> {
             await loadState(r);
             // Shown as soon as its own state is in, not when every room is.
             emit();
-            // Not on the way to showing the list: rotation, the picture, and
-            // the newest messages for the preview carry on behind it.
-            maybeRotate(r)
-              .then(() => ensureProfileCurrent(r))
-              .catch(() => {});
-            syncAvatar(r).catch(() => {});
+            // Not on the way to showing the list: rotation and the picture
+            // wait a moment and go one room at a time (after a week away,
+            // every room rotating at once held up opening one), and the
+            // newest messages for the preview carry on behind it.
+            upkeepLater(() => maybeRotate(r).then(() => ensureProfileCurrent(r)));
+            upkeepLater(() => syncAvatar(r));
             prefetchLatest(r)
               .then(emit)
               .catch(() => {});
@@ -520,7 +609,10 @@ async function loadRooms(): Promise<void> {
       );
       // Keep the vault in step with what's really there.
       if (fromVault && JSON.stringify(roomIdsOn(server)) !== vaultSaved.get(server)) saveVaultSoon(server);
-      if (roomIdsOn(server).length) connect(server);
+      // Already connected (watch() got there first, before these rooms
+      // loaded): subscribe them on that connection.
+      if (conns.get(server)?.nonce) wsSubscribe(server, [...rooms.values()].filter(r => r.server === server));
+      else if (roomIdsOn(server).length) connect(server);
     }),
   ).then(() => saveLocalList());
   // One slow or unreachable server mustn't hold the whole list: show what's
@@ -529,6 +621,19 @@ async function loadRooms(): Promise<void> {
   roomsLoaded = true;
   emit();
   work.then(emit).catch(() => {});
+}
+
+/** How long after loading starts the rooms' upkeep (see upkeepLater) begins. */
+const UPKEEP_DELAY_MS = 3000;
+let upkeep: Promise<void> | null = null;
+
+/** Queues work that can wait: a moment after launch, then one job at a time. */
+function upkeepLater(job: () => Promise<unknown>) {
+  const before = upkeep ?? new Promise<void>(res => setTimeout(res, UPKEEP_DELAY_MS));
+  upkeep = before.then(job).then(
+    () => {},
+    () => {},
+  );
 }
 
 /** The longest the room list waits for slow servers before showing what it has. */
@@ -662,7 +767,9 @@ function announce(r: Room, m: ChatMessage) {
  */
 export async function catchUp(key: string): Promise<void> {
   const r = rooms.get(key);
-  if (!r || !session.get()) return;
+  // Thrown, so the wake-up shows the plain notification instead (src/push.ts).
+  if (!r) throw new Error('room not loaded');
+  if (!session.get()) throw new Error('locked');
   if (!r.log) await loadState(r);
   connect(r.server); // and get the live connection back, if it dropped
   const newest = newestKnown(r);
@@ -697,6 +804,7 @@ export async function refreshAll(): Promise<void> {
       if (!newest) return prefetchLatest(r).catch(() => {});
       const page = await api.messages(r.server, r.id, r.me, {after: newest.pos, limit: 200}).catch(() => []);
       await ingestPage(r, page);
+      announceCaughtUp(r, page);
     }),
   );
   emit();
@@ -717,6 +825,7 @@ async function loadLatest(r: Room): Promise<void> {
   r.messages = r.messages.filter(m => m.pending);
   r.hasMore = page.length === 50;
   r.hasNewer = false;
+  r.fromCache = false;
   await ingestPage(r, page);
 }
 
@@ -735,23 +844,45 @@ export async function openRoom(key: string, fresh = true): Promise<void> {
     r.readMark = mark;
     r.newSinceRead = 0;
   }
+  // One open at a time per room. A catch-up (a reconnect) already under way
+  // is waited on, not raced: two at once both rewrote the messages, and a
+  // fresh open that just returned left the screen spinning on the other.
+  while (r.opening) {
+    await r.opening.catch(() => {});
+    // That one caught up; a fresh open still checks for itself (quickly).
+    if (!fresh) return;
+  }
   if (r.loading) {
+    // Paging (loadOlder and the like) holds the room.
     if (fresh) countUnread(r, mark).catch(() => {});
     return;
   }
+  const opening = openRoomNow(r, fresh, mark);
+  r.opening = opening;
+  try {
+    await opening;
+  } finally {
+    if (r.opening === opening) r.opening = undefined;
+  }
+}
+
+async function openRoomNow(r: Room, fresh: boolean, mark: number): Promise<void> {
   r.loading = true;
   emit();
   try {
     if (!r.log) await loadState(r);
     if (fresh) countUnread(r, mark).catch(() => {});
     const newest = newestKnown(r);
-    if (!newest || (fresh && r.hasNewer)) {
+    if (!newest || (fresh && r.hasNewer) || r.fromCache) {
       await loadLatest(r);
     } else {
       const page = await api.messages(r.server, r.id, r.me, {after: newest.pos, limit: 200});
       // More than a page behind: skip the gap and start from the bottom.
       if (page.length === 200 && !r.hasNewer) await loadLatest(r);
-      else await ingestPage(r, page);
+      else {
+        await ingestPage(r, page);
+        if (!fresh) announceCaughtUp(r, page);
+      }
     }
     pruneExpired(r);
     r.loaded = true;
@@ -761,6 +892,21 @@ export async function openRoom(key: string, fresh = true): Promise<void> {
   } finally {
     r.loading = false;
     emit();
+  }
+}
+
+/**
+ * Notifies for what a catch-up found (a reconnect, a pull to refresh), as a
+ * push would have: otherwise a wake-up arriving after it finds nothing new
+ * and stays silent. Only in the background: in the app, it's on screen.
+ */
+function announceCaughtUp(r: Room, page: ServerMessage[]) {
+  if (AppState.currentState === 'active') return;
+  for (const sm of page) {
+    if (sm.sender === r.me.id) continue;
+    const dm = r.messages.find(m => m.id === sm.id);
+    const c = dm?.content;
+    if (dm && (c?.t === 'text' || c?.t === 'file' || c?.t === 'ice' || !c)) announce(r, dm);
   }
 }
 
@@ -902,8 +1048,14 @@ interface Conn {
   closed: boolean;
 }
 const conns = new Map<string, Conn>();
-const serverStatus = new Map<string, boolean>();
-export const isServerOnline = (server: string) => serverStatus.get(server) ?? true;
+/** When each server's connection dropped, while it's down. */
+const offlineSince = new Map<string, number>();
+/** A drop shorter than this (usually the app coming back to the foreground) isn't worth a banner. */
+const OFFLINE_GRACE_MS = 4000;
+export const isServerOnline = (server: string) => {
+  const since = offlineSince.get(server);
+  return since === undefined || Date.now() - since < OFFLINE_GRACE_MS;
+};
 
 type IncomingListener = (room: Room, msg: ChatMessage) => void;
 const incomingListeners = new Set<IncomingListener>();
@@ -914,6 +1066,7 @@ export function onIncoming(l: IncomingListener): () => void {
 }
 
 export function connect(server: string) {
+  watchAppState();
   let c = conns.get(server);
   if (c && (c.ws || c.timer)) return;
   if (!c) {
@@ -922,6 +1075,46 @@ export function connect(server: string) {
   }
   c.closed = false;
   open(server, c);
+}
+
+/** When the app went to the background, while it's there. */
+let backgroundedAt: number | null = null;
+/** Back after longer than this, a connection that looks open may be dead (the server dropped it, the network changed). */
+const STALE_AFTER_MS = 30_000;
+let watchingAppState = false;
+
+/**
+ * Back in the foreground: reconnect now. In the background the retries back
+ * off (up to a minute), and a socket left open may have died without a word;
+ * waiting on either showed "Can't reach this room's server" for no reason.
+ */
+function watchAppState() {
+  if (watchingAppState) return;
+  watchingAppState = true;
+  AppState.addEventListener('change', state => {
+    if (state === 'background') {
+      backgroundedAt = Date.now();
+      return;
+    }
+    if (state !== 'active') return;
+    const away = backgroundedAt === null ? 0 : Date.now() - backgroundedAt;
+    backgroundedAt = null;
+    for (const [server, c] of conns) {
+      if (c.closed) continue;
+      c.backoff = 1000;
+      if (c.timer) {
+        clearTimeout(c.timer);
+        c.timer = null;
+      } else if (c.ws && away > STALE_AFTER_MS) {
+        const old = c.ws;
+        old.onclose = null;
+        old.onmessage = null;
+        old.close();
+        c.ws = null;
+      }
+      if (!c.ws) open(server, c);
+    }
+  });
 }
 
 export function disconnectAll() {
@@ -968,7 +1161,7 @@ function open(server: string, c: Conn) {
       const first = !c.ready;
       c.ready = true;
       c.backoff = 1000;
-      serverStatus.set(server, true);
+      if (offlineSince.delete(server)) emit();
       // Catch up on anything missed while disconnected (resync also asks
       // who's in voice). A room subscribed to later (just made or joined)
       // asks on its own.
@@ -987,8 +1180,11 @@ function open(server: string, c: Conn) {
     c.ws = null;
     c.ready = false;
     if (c.closed) return;
-    serverStatus.set(server, false);
-    emit();
+    if (!offlineSince.has(server)) {
+      offlineSince.set(server, Date.now());
+      // Shown only if it's still down once the grace period is over.
+      setTimeout(emit, OFFLINE_GRACE_MS + 50);
+    }
     c.timer = setTimeout(() => {
       c.timer = null;
       if (!c.closed) open(server, c);
@@ -1000,20 +1196,27 @@ function open(server: string, c: Conn) {
   };
 }
 
+/** A room whose log loaded this recently isn't reloaded by a reconnect, only caught up. */
+const RESYNC_RELOAD_AFTER_MS = 30_000;
+
 async function resync(server: string) {
-  for (const r of [...rooms.values()].filter(x => x.server === server)) {
-    try {
-      await loadState(r);
-      if (r.loaded) {
-        r.loading = false;
-        await openRoom(r.key, false);
-      }
-      await maybeRotate(r);
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 404) forgetRoom(r.key);
-      else r.error = String((e as Error).message ?? e);
-    }
-  }
+  // Every room at once, as loadRooms does. Right after launch the logs were
+  // just loaded: reloading (and re-verifying) each one again, one by one,
+  // held up the room being opened.
+  await Promise.all(
+    [...rooms.values()]
+      .filter(x => x.server === server)
+      .map(async r => {
+        try {
+          if (Date.now() - (r.syncedAt ?? 0) > RESYNC_RELOAD_AFTER_MS) await loadState(r);
+          if (r.loaded) await openRoom(r.key, false);
+          maybeRotate(r).catch(() => {});
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 404) forgetRoom(r.key);
+          else r.error = String((e as Error).message ?? e);
+        }
+      }),
+  );
   emit();
   // Ask who's in voice now, rather than waiting for the next heartbeats.
   for (const r of [...rooms.values()].filter(x => x.server === server)) probeVoice(r);
@@ -1425,7 +1628,8 @@ export async function addServer(server: string) {
   if (!s.servers.includes(server)) await settingsStore.update({servers: [...s.servers, server]});
 }
 
-export async function send(key: string, content: MessageContent, blobs: string[] = []): Promise<void> {
+/** replaceId: a pending bubble this one takes the place of (a file message, once its files are up). */
+export async function send(key: string, content: MessageContent, blobs: string[] = [], replaceId?: string): Promise<void> {
   const r = rooms.get(key);
   const s = r?.log?.state;
   if (!r || !s) throw new Error('room not loaded');
@@ -1447,6 +1651,7 @@ export async function send(key: string, content: MessageContent, blobs: string[]
     pending: true,
   };
   if (isLine) {
+    if (replaceId) r.messages = r.messages.filter(m => m.id !== replaceId);
     ingest(r, local);
     emit();
   }
@@ -1463,7 +1668,7 @@ export async function send(key: string, content: MessageContent, blobs: string[]
     if (e instanceof ApiError && e.status === 409) {
       // The room key rotated under us: pick up the new one and try again.
       await loadState(r);
-      if (r.log!.state.epoch !== epoch) return send(key, content, blobs);
+      if (r.log!.state.epoch !== epoch) return send(key, content, blobs, replaceId);
     }
     throw e;
   }
@@ -1477,37 +1682,153 @@ export interface Attachment {
   h?: number;
 }
 
-/** onStatus gets a short line to show while it works ("Uploading x.jpg… 40%"). */
-export async function sendFiles(
-  key: string,
-  files: Attachment[],
-  body: string,
-  replyTo?: string,
-  onStatus?: (status: string) => void,
-) {
+// ---- sending files ----
+//
+// A file message shows in the chat as soon as it's picked: a pending bubble
+// with the pictures themselves (from memory, under "local:" blob IDs) and
+// each one's upload progress. The work runs here, not in the room screen, so
+// it carries on whatever screen is showing. If it fails, the bubble stays,
+// marked as not sent, until it's retried or removed.
+
+interface FileUpload {
+  key: string;
+  /** The pending bubble (ChatMessage.id). */
+  id: string;
+  files: Attachment[];
+  body: string;
+  replyTo?: string;
+  /** Each file once it's on the server. */
+  refs: (FileRef | null)[];
+  progress: number[];
+  running: boolean;
+}
+const fileUploads = new Map<string, FileUpload>();
+const UPLOAD_TRIES = 3;
+const UPLOADS_AT_ONCE = 2;
+
+const localBlob = (id: string, i: number) => `local:${id}:${i}`;
+
+/** A picked file still being sent, by its local blob ID. */
+function localFile(blob: string): Uint8Array | undefined {
+  const [, id, i] = blob.split(':');
+  return blob.startsWith('local:') ? fileUploads.get(id)?.files[Number(i)]?.data : undefined;
+}
+
+/**
+ * Sends files (with an optional caption) as one message. Resolves once it's
+ * sent; on failure the bubble stays in the chat as not sent, and this rejects.
+ */
+export async function sendFiles(key: string, files: Attachment[], body: string, replyTo?: string): Promise<void> {
   const r = rooms.get(key);
   if (!r) throw new Error('room not loaded');
-  const refs: FileRef[] = [];
-  for (const [i, f] of files.entries()) {
-    const which = files.length > 1 ? ` (${i + 1}/${files.length})` : '';
-    onStatus?.(`Encrypting ${f.name}${which}…`);
-    // Let that paint before encrypting, which holds the JS thread briefly.
-    await new Promise(res => setTimeout(res, 0));
-    const {key: fk, sealed} = encryptBlob(f.data);
-    onStatus?.(`Uploading ${f.name}${which}…`);
-    const blob = await uploadBlob(r.server, r.id, r.me, sealed, frac =>
-      onStatus?.(`Uploading ${f.name}${which}… ${Math.round(frac * 100)}%`),
-    );
-    // What we just sent never needs downloading back.
-    putSealed(blob, sealed);
-    remember(blob, f.data);
-    refs.push({blob, key: b64(fk), name: f.name, mime: f.mime, size: f.data.length, w: f.w, h: f.h});
+  if (r.hasNewer) await jumpToLatest(key);
+  const id = `local-${b64(randomBytes(12))}`;
+  const u: FileUpload = {key, id, files, body, replyTo, refs: files.map(() => null), progress: files.map(() => 0), running: false};
+  fileUploads.set(id, u);
+  files.forEach((f, i) => remember(localBlob(id, i), f.data));
+  showUpload(u);
+  return runUpload(u);
+}
+
+/** Tries a file message that wasn't sent again, from the files not uploaded yet. */
+export function retryUpload(id: string): Promise<void> {
+  const u = fileUploads.get(id);
+  return u ? runUpload(u) : Promise.resolve();
+}
+
+/** Gives up on a file message that wasn't sent: its bubble goes. */
+export function discardUpload(id: string) {
+  const u = fileUploads.get(id);
+  if (!u || u.running) return;
+  fileUploads.delete(id);
+  const r = rooms.get(u.key);
+  if (r) r.messages = r.messages.filter(m => m.id !== id);
+  emit();
+}
+
+/** Puts the bubble in (or redraws it) with where the upload is. */
+function showUpload(u: FileUpload, failed?: string) {
+  const r = rooms.get(u.key);
+  if (!r) return;
+  const msg: ChatMessage = {
+    id: u.id,
+    pos: Number.MAX_SAFE_INTEGER,
+    sender: r.me.id,
+    createdAt: r.messages.find(m => m.id === u.id)?.createdAt ?? Date.now(),
+    epoch: r.log?.state.epoch ?? 0,
+    content: {
+      t: 'file',
+      files: u.files.map(
+        (f, i) => u.refs[i] ?? {blob: localBlob(u.id, i), key: '', name: f.name, mime: f.mime, size: f.data.length, w: f.w, h: f.h},
+      ),
+      body: u.body || undefined,
+      replyTo: u.replyTo,
+      ts: Date.now(),
+    } as DecryptedMessage,
+    pending: true,
+    upload: {progress: [...u.progress], failed},
+  };
+  r.messages = [...r.messages.filter(m => m.id !== u.id), msg];
+}
+
+async function runUpload(u: FileUpload): Promise<void> {
+  if (u.running) return;
+  u.running = true;
+  showUpload(u);
+  emit();
+  let lastDrawn = 0;
+  const progressed = (i: number, frac: number) => {
+    if (frac <= u.progress[i]) return; // never backwards
+    u.progress[i] = frac;
+    if (Date.now() - lastDrawn < 100 && frac < 1) return;
+    lastDrawn = Date.now();
+    showUpload(u);
+    emit();
+  };
+  try {
+    const r = rooms.get(u.key);
+    if (!r) throw new Error('room not loaded');
+    // A few at a time, each tried again a couple of times before giving up.
+    const todo = u.files.map((_, i) => i).filter(i => !u.refs[i]);
+    const worker = async () => {
+      for (let i = todo.shift(); i !== undefined; i = todo.shift()) {
+        const f = u.files[i];
+        // Let the bubble paint before encrypting, which holds the JS thread briefly.
+        await yieldToUi();
+        const {key: fk, sealed} = encryptBlob(f.data);
+        let blob = '';
+        for (let tries = 1; !blob; tries++) {
+          try {
+            blob = await uploadBlob(r.server, r.id, r.me, sealed, frac => progressed(i, frac));
+          } catch (e) {
+            if (tries >= UPLOAD_TRIES) throw e;
+            await new Promise(res => setTimeout(res, 1000 * tries));
+          }
+        }
+        // What we just sent never needs downloading back.
+        putSealed(blob, sealed);
+        remember(blob, f.data);
+        u.refs[i] = {blob, key: b64(fk), name: f.name, mime: f.mime, size: f.data.length, w: f.w, h: f.h};
+        progressed(i, 1);
+      }
+    };
+    await Promise.all(Array.from({length: Math.min(UPLOADS_AT_ONCE, todo.length)}, worker));
+    const refs = u.refs as FileRef[];
+    await send(u.key, {t: 'file', files: refs, body: u.body || undefined, replyTo: u.replyTo}, refs.map(x => x.blob), u.id);
+    fileUploads.delete(u.id);
+  } catch (e) {
+    u.running = false;
+    showUpload(u, String((e as Error).message ?? e));
+    emit();
+    throw e;
   }
-  await send(key, {t: 'file', files: refs, body: body || undefined, replyTo}, refs.map(x => x.blob));
+  u.running = false;
 }
 
 const blobCache = new Map<string, Uint8Array>();
 export async function fetchFile(key: string, ref: FileRef): Promise<Uint8Array> {
+  const local = localFile(ref.blob);
+  if (local) return local;
   const cached = blobCache.get(ref.blob);
   if (cached) {
     remember(ref.blob, cached); // most recently used
@@ -1580,9 +1901,21 @@ const NativeBlob = Platform.OS === 'android' ? (NativeModules.Blob as BlobNative
  * natively off the JS thread (BlobModule.kt), so taps never wait on it; the
  * JS path is the fallback (older Android, the browser).
  */
-export async function loadImage(key: string, ref: FileRef): Promise<ShownImage> {
+export function loadImage(key: string, ref: FileRef): Promise<ShownImage> {
   const ready = peekImage(ref);
-  if (ready) return ready;
+  if (ready) return Promise.resolve(ready);
+  // The same blob asked for again while loading (a row redrawn, a repeated
+  // avatar) waits on that load: two at once raced on the native download.
+  let p = imageLoads.get(ref.blob);
+  if (!p) {
+    p = loadImageOnce(key, ref).finally(() => imageLoads.delete(ref.blob));
+    imageLoads.set(ref.blob, p);
+  }
+  return p;
+}
+const imageLoads = new Map<string, Promise<ShownImage>>();
+
+async function loadImageOnce(key: string, ref: FileRef): Promise<ShownImage> {
   const r = rooms.get(key);
   if (!r) throw new Error('room not loaded');
   if (NativeBlob) {
@@ -1886,5 +2219,6 @@ export function resetStore() {
   AsyncStorage.removeItem(MY_AVATAR_KEY).catch(() => {});
   listCache = {};
   AsyncStorage.removeItem(LIST_CACHE_KEY).catch(() => {});
+  clearMessageCaches();
   emit();
 }

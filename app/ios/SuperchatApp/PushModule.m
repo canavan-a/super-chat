@@ -19,6 +19,8 @@ static NSString *const kWakeThread = @"sc-wake";
 
 @interface PushModule : RCTEventEmitter <RCTBridgeModule>
 - (void)wake:(NSString *)topic;
+/** Whether JS is listening for wake-ups (it is once the app is unlocked). */
+- (BOOL)listening;
 @end
 
 /**
@@ -53,14 +55,21 @@ static NSString *const kWakeThread = @"sc-wake";
   [UNUserNotificationCenter currentNotificationCenter].delegate = [PushCenterDelegate shared];
 }
 
-// App open: no banner for a wake-up, the app shows the room's own notification.
+// App open: no banner for a wake-up, the app shows the room's own
+// notification. Unless JS isn't listening yet (still locked, say): then the
+// plain alert shows, rather than nothing at all.
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
        willPresentNotification:(UNNotification *)notification
          withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler
 {
   NSString *topic = notification.request.content.userInfo[@"t"];
-  if ([topic isKindOfClass:[NSString class]]) [self.module wake:topic];
-  completionHandler(UNNotificationPresentationOptionNone);
+  PushModule *module = self.module;
+  if ([topic isKindOfClass:[NSString class]] && module.listening) {
+    [module wake:topic];
+    completionHandler(UNNotificationPresentationOptionNone);
+  } else {
+    completionHandler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionSound | UNNotificationPresentationOptionList);
+  }
 }
 
 // A tapped "New message" opens the app, which catches up by itself.
@@ -103,6 +112,11 @@ RCT_EXPORT_MODULE(Push)
 - (void)wake:(NSString *)topic
 {
   if (_listening) [self sendEventWithName:@"PushWake" body:@{@"topic" : topic}];
+}
+
+- (BOOL)listening
+{
+  return _listening;
 }
 
 /** Asks for permission to notify (once; iOS remembers the answer), then registers with APNs. */
