@@ -1052,9 +1052,18 @@ const conns = new Map<string, Conn>();
 const offlineSince = new Map<string, number>();
 /** A drop shorter than this (usually the app coming back to the foreground) isn't worth a banner. */
 const OFFLINE_GRACE_MS = 4000;
+/** Down this long and it's no longer a blip: the banner turns to an error. */
+const OFFLINE_ERROR_MS = 20_000;
 export const isServerOnline = (server: string) => {
   const since = offlineSince.get(server);
   return since === undefined || Date.now() - since < OFFLINE_GRACE_MS;
+};
+export type ServerStatus = 'online' | 'reconnecting' | 'offline';
+export const serverStatus = (server: string): ServerStatus => {
+  const since = offlineSince.get(server);
+  if (since === undefined) return 'online';
+  const down = Date.now() - since;
+  return down < OFFLINE_GRACE_MS ? 'online' : down < OFFLINE_ERROR_MS ? 'reconnecting' : 'offline';
 };
 
 type IncomingListener = (room: Room, msg: ChatMessage) => void;
@@ -1184,6 +1193,7 @@ function open(server: string, c: Conn) {
       offlineSince.set(server, Date.now());
       // Shown only if it's still down once the grace period is over.
       setTimeout(emit, OFFLINE_GRACE_MS + 50);
+      setTimeout(emit, OFFLINE_ERROR_MS + 50);
     }
     c.timer = setTimeout(() => {
       c.timer = null;

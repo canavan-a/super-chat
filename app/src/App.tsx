@@ -49,7 +49,7 @@ import {VoiceScreen} from './screens/VoiceScreen';
 import {VoiceBar} from './components/VoiceBar';
 import {session} from './session';
 import {settingsStore} from './settings';
-import {getRoom, isServerOnline, refreshAll, refreshRooms, resetStore, roomList, roomsReady, useStore} from './store';
+import {getRoom, refreshAll, refreshRooms, resetStore, roomList, roomsReady, serverStatus, useStore} from './store';
 import {Theme, ThemeProvider, useTheme} from './theme';
 
 const TITLES: Record<Route['name'], string> = {
@@ -377,13 +377,18 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
 
   const showingRoomHeader = (route.name === 'room' || route.name === 'roomSettings' || route.name === 'voice') && headerInfo;
   const activeKey = route.name === 'room' || route.name === 'roomSettings' || route.name === 'voice' ? route.key : null;
-  const offline = activeKey ? !isServerOnline(getRoom(activeKey)?.server ?? '') : false;
+  const status = activeKey ? serverStatus(getRoom(activeKey)?.server ?? '') : 'online';
 
   return (
     <View style={styles.container}>
       <StatusBar barStyle={theme.name === 'light' || theme.name === 'sepia' ? 'dark-content' : 'light-content'} />
 
-      {offline && (
+      {status === 'reconnecting' && (
+        <View style={styles.reconnectingBanner}>
+          <Text style={styles.reconnectingBannerText}>Reconnecting…</Text>
+        </View>
+      )}
+      {status === 'offline' && (
         <View style={styles.offlineBanner}>
           <Text style={styles.offlineBannerText}>Can't reach this room's server. Reconnecting…</Text>
         </View>
@@ -512,6 +517,14 @@ function makeStyles(theme: Theme) {
       borderBottomColor: theme.danger,
     },
     offlineBannerText: {color: theme.danger, fontSize: 12, fontWeight: '600', textAlign: 'center'},
+    reconnectingBanner: {
+      backgroundColor: theme.surface,
+      paddingVertical: 8,
+      paddingHorizontal: 16,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.border,
+    },
+    reconnectingBannerText: {color: theme.textMuted, fontSize: 12, fontWeight: '600', textAlign: 'center'},
     header: {
       flexDirection: 'row',
       alignItems: 'center',
