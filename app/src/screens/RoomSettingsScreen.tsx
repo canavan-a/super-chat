@@ -150,6 +150,52 @@ export function RoomSettingsScreen({
       {error && <Text style={styles.error}>{error}</Text>}
 
       {isAdmin && (
+        <Section title="Chat" styles={styles}>
+          <Text style={styles.label}>Name</Text>
+          <View style={styles.inline}>
+            <TextInput
+              style={[styles.input, styles.flex]}
+              value={name}
+              onChangeText={setName}
+              maxLength={80}
+              placeholder="No name: shows who's in it"
+              placeholderTextColor={theme.textMuted}
+            />
+            {name !== '' && (
+              <Pressable style={styles.secondary} onPress={() => setName('')} accessibilityLabel="Clear name">
+                <Icon name="close" size={14} color={theme.text} />
+              </Pressable>
+            )}
+          </View>
+          <View style={styles.swatches}>
+            {ROOM_COLORS.map(c => (
+              <Pressable key={c} onPress={() => setColor(c)} style={[styles.swatch, {backgroundColor: c}, color === c && styles.swatchOn]} />
+            ))}
+          </View>
+          <Pressable
+            style={[styles.primary, busy === 'meta' && styles.disabled]}
+            disabled={busy === 'meta'}
+            onPress={() => run('meta', () => setMeta(roomKey, name.trim(), color))}>
+            <Text style={styles.primaryText}>Save name and color</Text>
+          </Pressable>
+
+          <Text style={styles.label}>Group picture</Text>
+          <View style={styles.inline}>
+            <ChatAvatar roomKey={roomKey} picture={view.picture} color={view.color ?? theme.surfaceAlt} size={56} />
+            <Pressable style={[styles.secondary, busy === 'picture' && styles.disabled]} disabled={busy === 'picture'} onPress={choosePicture}>
+              {busy === 'picture' ? <ActivityIndicator size="small" color={theme.text} /> : <Text style={styles.secondaryText}>Choose…</Text>}
+            </Pressable>
+            {view.picture && busy !== 'picture' && (
+              <Pressable style={styles.secondary} onPress={() => run('picture', () => setRoomPicture(roomKey, null))}>
+                <Text style={styles.secondaryText}>Remove</Text>
+              </Pressable>
+            )}
+          </View>
+          <Text style={styles.help}>Shown for group chats. A one-to-one chat shows the other person instead.</Text>
+        </Section>
+      )}
+
+      {isAdmin && (
         <Section title="Invite" styles={styles}>
           <Text style={styles.help}>
             Anyone with the link can join until it expires, runs out of uses, or you revoke it. They'll only see
@@ -290,52 +336,6 @@ export function RoomSettingsScreen({
         </View>
         <Text style={styles.help}>Encrypted: only members see it.</Text>
       </Section>
-
-      {isAdmin && (
-        <Section title="Chat" styles={styles}>
-          <Text style={styles.label}>Group picture</Text>
-          <View style={styles.inline}>
-            <ChatAvatar roomKey={roomKey} picture={view.picture} color={view.color ?? theme.surfaceAlt} size={56} />
-            <Pressable style={[styles.secondary, busy === 'picture' && styles.disabled]} disabled={busy === 'picture'} onPress={choosePicture}>
-              {busy === 'picture' ? <ActivityIndicator size="small" color={theme.text} /> : <Text style={styles.secondaryText}>Choose…</Text>}
-            </Pressable>
-            {view.picture && busy !== 'picture' && (
-              <Pressable style={styles.secondary} onPress={() => run('picture', () => setRoomPicture(roomKey, null))}>
-                <Text style={styles.secondaryText}>Remove</Text>
-              </Pressable>
-            )}
-          </View>
-          <Text style={styles.help}>Shown for group chats. A one-to-one chat shows the other person instead.</Text>
-
-          <Text style={styles.label}>Name</Text>
-          <View style={styles.inline}>
-            <TextInput
-              style={[styles.input, styles.flex]}
-              value={name}
-              onChangeText={setName}
-              maxLength={80}
-              placeholder="No name: shows who's in it"
-              placeholderTextColor={theme.textMuted}
-            />
-            {name !== '' && (
-              <Pressable style={styles.secondary} onPress={() => setName('')} accessibilityLabel="Clear name">
-                <Icon name="close" size={14} color={theme.text} />
-              </Pressable>
-            )}
-          </View>
-          <View style={styles.swatches}>
-            {ROOM_COLORS.map(c => (
-              <Pressable key={c} onPress={() => setColor(c)} style={[styles.swatch, {backgroundColor: c}, color === c && styles.swatchOn]} />
-            ))}
-          </View>
-          <Pressable
-            style={[styles.primary, busy === 'meta' && styles.disabled]}
-            disabled={busy === 'meta'}
-            onPress={() => run('meta', () => setMeta(roomKey, name.trim(), color))}>
-            <Text style={styles.primaryText}>Save name and color</Text>
-          </Pressable>
-        </Section>
-      )}
 
       <Section title="Message retention" styles={styles}>
         <Text style={styles.help}>

@@ -1051,7 +1051,7 @@ const conns = new Map<string, Conn>();
 /** When each server's connection dropped, while it's down. */
 const offlineSince = new Map<string, number>();
 /** A drop shorter than this (usually the app coming back to the foreground) isn't worth a banner. */
-const OFFLINE_GRACE_MS = 4000;
+export const OFFLINE_GRACE_MS = 4000;
 /** Down this long and it's no longer a blip: the banner turns to an error. */
 const OFFLINE_ERROR_MS = 20_000;
 export const isServerOnline = (server: string) => {

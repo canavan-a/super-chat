@@ -46,6 +46,7 @@ import {
   loadNewer,
   loadOlder,
   isCallNotice,
+  OFFLINE_GRACE_MS,
   markRead,
   openRoom,
   peekImage,
@@ -85,10 +86,22 @@ export function RoomScreen({
   const [error, setError] = useState<string | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
   const lastTyping = useRef(0);
+  const roomError = useSettledError(room?.error ?? null);
+  // Not yet shown as an error: still trying, and the screen says so.
+  const connecting = !!room?.error && !roomError;
 
   useEffect(() => {
     openRoom(roomKey);
   }, [roomKey]);
+
+  // A failed load gets another go within the grace period, so "Connecting…"
+  // is really connecting rather than waiting to turn red.
+  const failed = room?.error;
+  useEffect(() => {
+    if (!failed) return;
+    const t = setTimeout(() => openRoom(roomKey, false).catch(() => {}), OFFLINE_GRACE_MS / 2);
+    return () => clearTimeout(t);
+  }, [failed, roomKey]);
 
   const view = room?.view;
   const isAdmin = !!view?.members.find(m => m.id === meId && m.role === 'admin');
@@ -182,9 +195,15 @@ export function RoomScreen({
   return (
     <View style={styles.container}>
       <VoiceStrip roomKey={roomKey} onNavigate={onNavigate} />
-      {(room.error || error) && (
+      {connecting && !error && room.loaded && (
+        <View style={styles.connectingRow}>
+          <ActivityIndicator size="small" color={theme.textMuted} />
+          <Text style={styles.connectingText}>Connecting…</Text>
+        </View>
+      )}
+      {(roomError || error) && (
         <View style={styles.errorRow}>
-          <Text style={styles.errorText}>{error ?? room.error}</Text>
+          <Text style={styles.errorText}>{error ?? roomError}</Text>
           <Pressable onPress={() => setError(null)} hitSlop={8}>
             <Icon name="close" size={14} color={theme.danger} />
           </Pressable>
@@ -193,7 +212,7 @@ export function RoomScreen({
 
       {!room.loaded && room.messages.length === 0 ? (
         <View style={styles.center}>
-          {room.error && !room.loading ? (
+          {roomError && !room.loading ? (
             <>
               <Text style={styles.muted}>Couldn't load this room.</Text>
               <Pressable style={styles.retryButton} onPress={() => openRoom(roomKey)}>
@@ -203,7 +222,7 @@ export function RoomScreen({
           ) : (
             <>
               <ActivityIndicator color={theme.textMuted} />
-              <Text style={styles.muted}>Decrypting messages…</Text>
+              <Text style={styles.muted}>{connecting ? 'Connecting…' : 'Decrypting messages…'}</Text>
             </>
           )}
         </View>
@@ -294,6 +313,24 @@ export function RoomScreen({
     if (c.t === 'ice') return '🔊 Voice server';
     return '';
   }
+}
+
+/**
+ * A room's load error, once it's lasted the grace period. Most are a blip (the
+ * app coming back to the foreground before the network is up) and clear on
+ * the next try: flashing a red row for those looked like something broke.
+ */
+function useSettledError(err: string | null): string | null {
+  const [shown, setShown] = useState<string | null>(null);
+  useEffect(() => {
+    if (!err) {
+      setShown(null);
+      return;
+    }
+    const t = setTimeout(() => setShown(err), OFFLINE_GRACE_MS);
+    return () => clearTimeout(t);
+  }, [err]);
+  return err ? shown : null;
 }
 
 // Same approach as super-badger's ChatList: natural order (no `inverted`,
@@ -1202,6 +1239,18 @@ function makeStyles(theme: Theme) {
       borderBottomColor: theme.danger,
     },
     errorText: {flex: 1, color: theme.danger, fontSize: 13},
+    connectingRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+      backgroundColor: theme.surface,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.border,
+    },
+    connectingText: {color: theme.textMuted, fontSize: 12, fontWeight: '600'},
     // The page color sits under the constellation; the list is see-through.
     chatContainer: {flex: 1, backgroundColor: theme.bg},
     chat: {flex: 1},
