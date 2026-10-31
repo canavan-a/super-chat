@@ -532,6 +532,7 @@ function dropWiped(r: Room): boolean {
 async function loadKeys(r: Room): Promise<void> {
   if (!r.log) return;
   const envelopes = await api.keys(r.server, r.id, r.me);
+  let opened = 0;
   for (const env of envelopes) {
     if (r.keys[env.epoch]) continue;
     const commit = r.log.commits[env.epoch];
@@ -541,6 +542,8 @@ async function loadKeys(r: Room): Promise<void> {
     } catch {
       // A bad envelope: leave that epoch unreadable rather than trust it.
     }
+    // Each is a key exchange in JS: a room with many epochs held the UI.
+    if (++opened % 4 === 0) await yieldToUi();
   }
 }
 
@@ -822,11 +825,21 @@ function newestKnown(r: Room): ChatMessage | undefined {
 /** Replaces what's held with the newest page: the bottom of the chat. */
 async function loadLatest(r: Room): Promise<void> {
   const page = await api.messages(r.server, r.id, r.me, {limit: 50});
+  // Lines already held (cached, prefetched for the room list) were checked
+  // when they came in: reused, not decrypted again, and the same objects
+  // keep their rows from re-rendering. The rest decrypt before anything is
+  // replaced, so the chat never shows half a page mid-load.
+  const held = new Map(r.messages.filter(m => !m.pending && m.content).map(m => [m.id, m]));
+  const msgs: ChatMessage[] = [];
+  for (let i = 0; i < page.length; i++) {
+    msgs.push(held.get(page[i].id) ?? decrypt(r, page[i]));
+    if (i % 8 === 7) await yieldToUi();
+  }
   r.messages = r.messages.filter(m => m.pending);
   r.hasMore = page.length === 50;
   r.hasNewer = false;
   r.fromCache = false;
-  await ingestPage(r, page);
+  for (const m of msgs) ingest(r, m);
 }
 
 /**

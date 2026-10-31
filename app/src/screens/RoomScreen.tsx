@@ -188,6 +188,10 @@ export function RoomScreen({
     }
   };
 
+  // Opening with lines already held (cached, or the room list's preview):
+  // they show straight away, and this says the rest is on its way.
+  const catchingUp = room.loading && !room.loaded && room.messages.length > 0;
+
   const typing = Object.entries(room.typing)
     .filter(([, until]) => until > Date.now())
     .map(([id]) => nameOf(id));
@@ -195,10 +199,10 @@ export function RoomScreen({
   return (
     <View style={styles.container}>
       <VoiceStrip roomKey={roomKey} onNavigate={onNavigate} />
-      {connecting && !error && room.loaded && (
+      {((connecting && room.loaded) || catchingUp) && !error && (
         <View style={styles.connectingRow}>
           <ActivityIndicator size="small" color={theme.textMuted} />
-          <Text style={styles.connectingText}>Connecting…</Text>
+          <Text style={styles.connectingText}>{connecting ? 'Connecting…' : 'Loading messages…'}</Text>
         </View>
       )}
       {(roomError || error) && (
@@ -616,7 +620,7 @@ function ChatList({
         // Inverted, the footer is drawn at the top: where the history starts.
         ListFooterComponent={
           <View>
-            {room.loading && !pagingDown && <ActivityIndicator style={styles.olderSpinner} size="small" color={theme.textMuted} />}
+            {room.loading && room.loaded && !pagingDown && <ActivityIndicator style={styles.olderSpinner} size="small" color={theme.textMuted} />}
             {!room.hasMore && room.loaded && (
               <View style={styles.startNotice}>
                 <Icon name="shield" size={14} color={theme.textMuted} />
