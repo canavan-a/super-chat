@@ -3,7 +3,7 @@
 // then leaves the current one before joining.
 import {platformConfirm} from '../platformConfirm';
 import type {Route} from '../routes';
-import {getRoom} from '../store';
+import {chatTitle, getRoom} from '../store';
 import {roomVoice, voice} from './voice';
 
 export function openVoice(roomKey: string, navigate: (r: Route) => void) {
@@ -22,8 +22,8 @@ export function openVoice(roomKey: string, navigate: (r: Route) => void) {
     voice.switchTo(roomKey).catch(() => {});
   };
   if (v.roomKey && v.phase !== 'idle') {
-    const from = getRoom(v.roomKey)?.view?.name ?? 'another room';
-    const to = getRoom(roomKey)?.view?.name ?? 'this room';
+    const from = chatTitle(getRoom(v.roomKey)) ?? 'another room';
+    const to = chatTitle(getRoom(roomKey)) ?? 'this room';
     platformConfirm(
       'Switch voice room?',
       `Leave voice in ${from} and join ${to}?`,

@@ -1044,7 +1044,7 @@ const MessageRow = React.memo(function MessageRow({
               )}
             {c?.t === 'ice' ? <IceServerCard server={c.server} mine={mine} sharedBy={name} color={textColor} /> : null}
             {c && (c.t === 'text' || (c.t === 'file' && c.body)) ? (
-              <MarkdownText text={c.t === 'text' ? c.body : c.body!} color={textColor} theme={theme} onLinkLongPress={onLongPress} />
+              <MarkdownText text={c.t === 'text' ? c.body : c.body!} color={textColor} onLinkLongPress={onLongPress} />
             ) : null}
           </Pressable>
           {entries.length > 0 && (

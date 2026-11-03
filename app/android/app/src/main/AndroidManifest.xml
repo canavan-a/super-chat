@@ -9,16 +9,19 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- What only the sideloaded build has (the background connection for
-         notifications, the in-app updater) is in src/sideload/AndroidManifest.xml;
-         the Google Play build adds just the voice service type, in
-         src/play/AndroidManifest.xml. -->
-    <!-- Voice rooms (src/call/): the microphone, audio routing (speaker,
-         earpiece, Bluetooth headsets), and a microphone-type foreground
-         service so voice keeps going with the app in the background. -->
+         notifications, the in-app updater) is in src/sideload/AndroidManifest.xml,
+         and the Google Play build's FCM service in src/play/AndroidManifest.xml. -->
+    <!-- Voice rooms (src/call/): the microphone, and a voice room as a
+         self-managed Telecom call (VoiceCallService.kt), which owns audio
+         routing (speaker, earpiece, Bluetooth headsets) and runs as a
+         phoneCall|microphone foreground service so voice keeps going with
+         the app in the background. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
 
     <application
       android:name=".MainApplication"
@@ -57,6 +60,11 @@
           <data android:scheme="superchat" android:host="join" />
         </intent-filter>
       </activity>
+
+      <service
+        android:name=".VoiceCallService"
+        android:foregroundServiceType="phoneCall|microphone"
+        android:exported="false" />
 
       <!-- The launcher entries. MainActivity is no longer launchable by itself;
            instead there is one alias per app theme, each with that theme's

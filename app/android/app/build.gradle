@@ -157,6 +157,10 @@ dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
 
+    // Voice rooms as self-managed calls (VoiceCallService.kt).
+    implementation "androidx.core:core-telecom:1.0.1"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"
+
     // FCM wake-ups, Google Play build only (src/play): the sideload build has
     // no Google code at all. Firebase's settings are src/play/res/values/
     // google_services.xml rather than the google-services Gradle plugin,

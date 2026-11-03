@@ -23,6 +23,7 @@ class MainApplication : Application(), ReactApplication {
               add(ScryptPackage())
               add(ImageCropPackage())
               add(BlobPackage())
+              add(VoiceCallPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"

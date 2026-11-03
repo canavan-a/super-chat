@@ -10,6 +10,8 @@ export const VOICE_ACTIONS = {
   mute: 'voice-mute',
   deafen: 'voice-deafen',
   leave: 'voice-leave',
+  muteOn: 'voice-mute-on',
+  muteOff: 'voice-mute-off',
 } as const;
 export function handleVoiceAction(_id: string | undefined): boolean {
   return false;

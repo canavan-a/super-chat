@@ -15,7 +15,7 @@ import {
 import {voiceSummary} from '../call/engine';
 import {useVoice} from '../call/voice';
 import type {Route} from '../routes';
-import {getRoom, useStore} from '../store';
+import {chatTitle, getRoom, useStore} from '../store';
 import {Theme, useTheme} from '../theme';
 import {Icon} from './Icon';
 import {VoiceControls} from './VoiceControls';
@@ -39,7 +39,7 @@ export function VoiceBar({
   const v = useVoice();
   const {width} = useWindowDimensions();
   const roomName = useStore(() =>
-    v.roomKey ? getRoom(v.roomKey)?.view?.name ?? 'Voice' : '',
+    v.roomKey ? chatTitle(getRoom(v.roomKey)) ?? 'Voice' : '',
   );
   const [now, setNow] = useState(Date.now());
   useEffect(() => {

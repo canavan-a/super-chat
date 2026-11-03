@@ -29,7 +29,7 @@ import {AMBER} from '../components/VoiceBar';
 import {VoiceControls} from '../components/VoiceControls';
 import {fingerprint} from '../crypto';
 import type {Route} from '../routes';
-import {getRoom, useStore} from '../store';
+import {chatTitle, getRoom, useStore} from '../store';
 import {Theme, useTheme} from '../theme';
 
 const CAP = MAX_PEERS + 1;
@@ -67,11 +67,11 @@ export function VoiceScreen({
 
   useEffect(() => {
     onHeaderChange({
-      title: room?.view?.name ?? 'Voice',
+      title: chatTitle(room) ?? 'Voice',
       accentColor: room?.view?.color ?? undefined,
       subtitle: `Voice · ${presence.count}/${CAP}`,
     });
-  }, [room?.view?.name, room?.view?.color, presence.count, onHeaderChange]);
+  }, [room, presence.count, onHeaderChange]);
 
   const tiles: TileData[] = useMemo(() => {
     if (!mine || !room) {

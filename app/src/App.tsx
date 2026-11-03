@@ -18,7 +18,6 @@ import {
 } from 'react-native';
 
 import {useThemedAppIcon} from './appIcon';
-import {handleVoiceAction} from './call/voiceService';
 import {RemoteAudio} from './call/RemoteAudio';
 import {voice} from './call/voice';
 import {applyUpdateIfSafe, setThemeColor, startPwa} from './pwa/pwa';
@@ -245,7 +244,6 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
     import('@notifee/react-native').then(({default: notifee, EventType}) => {
       notifee.getInitialNotification().then(initial => open(navTarget(initial?.notification.data)));
       unsubscribeForeground = notifee.onForegroundEvent(({type, detail}) => {
-        if (type === EventType.ACTION_PRESS && handleVoiceAction(detail.pressAction?.id)) return;
         if (type === EventType.PRESS) open(navTarget(detail.notification?.data));
       });
     });

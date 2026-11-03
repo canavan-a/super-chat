@@ -14,13 +14,13 @@
     <application>
       <!-- Notifee's own foreground-service implementation, used to keep a
            background WebSocket alive for notifications while the app isn't
-           in the foreground, and to keep voice going (microphone). tools:replace
-           is needed because Notifee's AAR merges in this service without a
-           type, and Android 14+ requires a foreground service type matching
-           a held permission. -->
+           in the foreground. (Voice has its own service, VoiceCallService.)
+           tools:replace is needed because Notifee's AAR merges in this
+           service without a type, and Android 14+ requires a foreground
+           service type matching a held permission. -->
       <service
         android:name="app.notifee.core.ForegroundService"
-        android:foregroundServiceType="dataSync|microphone"
+        android:foregroundServiceType="dataSync"
         android:exported="false"
         tools:replace="android:foregroundServiceType" />
 

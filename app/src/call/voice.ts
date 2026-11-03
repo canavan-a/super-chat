@@ -7,6 +7,7 @@ import {b64, fingerprint, randomBytes} from '../crypto';
 import {rtcPlatform} from '../rtc';
 import {settingsStore} from '../settings';
 import {
+  chatTitle,
   getRoom,
   isServerOnline,
   onRtc,
@@ -30,13 +31,13 @@ export const voice = createVoiceEngine({
   micPermission: () => rtcPlatform.micPermission(),
   getMic: () => rtcPlatform.getMic() as any,
   createPC: cfg => rtcPlatform.createPC(cfg) as any,
-  startAudio: onRoute => rtcPlatform.startAudio(onRoute),
+  startAudio: (onRoute, title) => rtcPlatform.startAudio(onRoute, title),
   setSpeaker: on => rtcPlatform.setSpeaker(on),
   send: sendRtc,
   settings: () => settingsStore.get(),
   nameOf: (key, member) => {
     const r = getRoom(key);
-    if (!member) return r?.view?.name ?? '';
+    if (!member) return chatTitle(r) ?? '';
     return r?.view?.names[member] || fingerprint(member);
   },
   roomExists: key => !!getRoom(key),
@@ -97,6 +98,8 @@ setVoiceActionHandler(id => {
   if (id === VOICE_ACTIONS.mute) voice.setMuted(!v.muted);
   else if (id === VOICE_ACTIONS.deafen) voice.setDeafened(!v.deafened);
   else if (id === VOICE_ACTIONS.leave) voice.leave().catch(() => {});
+  else if (id === VOICE_ACTIONS.muteOn) voice.setMuted(true);
+  else if (id === VOICE_ACTIONS.muteOff) voice.setMuted(false);
 });
 
 export function useVoice(): VoiceView {

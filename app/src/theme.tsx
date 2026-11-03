@@ -26,10 +26,6 @@ export interface Theme {
   bubbleUserText: string;
   bubbleAssistant: string;
   bubbleAssistantText: string;
-  codeBg: string;
-  codeBorder: string;
-  codeText: string;
-  inlineCodeBg: string;
 }
 
 const light: Theme = {
@@ -49,10 +45,6 @@ const light: Theme = {
   bubbleUserText: '#ffffff',
   bubbleAssistant: '#f0f0f0',
   bubbleAssistantText: '#1b1f24',
-  codeBg: '#f6f8fa',
-  codeBorder: '#d0d7de',
-  codeText: '#24292f',
-  inlineCodeBg: '#e5e5e5',
 };
 
 const dark: Theme = {
@@ -72,10 +64,6 @@ const dark: Theme = {
   bubbleUserText: '#ffffff',
   bubbleAssistant: '#21262d',
   bubbleAssistantText: '#e6edf3',
-  codeBg: '#161b22',
-  codeBorder: '#30363d',
-  codeText: '#c9d1d9',
-  inlineCodeBg: '#2d333b',
 };
 
 const slate: Theme = {
@@ -95,10 +83,6 @@ const slate: Theme = {
   bubbleUserText: '#0d1117',
   bubbleAssistant: '#2f3947',
   bubbleAssistantText: '#dde3ea',
-  codeBg: '#232b37',
-  codeBorder: '#3c4757',
-  codeText: '#cdd6e0',
-  inlineCodeBg: '#39424f',
 };
 
 const sepia: Theme = {
@@ -118,10 +102,6 @@ const sepia: Theme = {
   bubbleUserText: '#fdf6e7',
   bubbleAssistant: '#e5d7b8',
   bubbleAssistantText: '#3b2f1e',
-  codeBg: '#ece0c6',
-  codeBorder: '#d8c6a0',
-  codeText: '#3b2f1e',
-  inlineCodeBg: '#dccca3',
 };
 
 // Same dark base as `dark`, swapping its blue accent for a warm red/orange
@@ -145,10 +125,6 @@ const ember: Theme = {
   bubbleUserText: '#f1e2d9',
   bubbleAssistant: '#150f0d',
   bubbleAssistantText: '#e8d9d0',
-  codeBg: '#0c0908',
-  codeBorder: '#241815',
-  codeText: '#d9c9bf',
-  inlineCodeBg: '#1c130f',
 };
 
 export const THEMES: Record<ThemeName, Theme> = {light, dark, slate, sepia, ember};

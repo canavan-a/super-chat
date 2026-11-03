@@ -9,7 +9,7 @@ import {fingerprint} from '../crypto';
 import {isSideload} from '../distribution';
 import {rgbToHex, themeAccent} from '../logo/logoTheme';
 import {settingsStore} from '../settings';
-import type {ChatMessage, Room} from '../store';
+import {chatTitle, type ChatMessage, type Room} from '../store';
 import {THEMES} from '../theme';
 import {CH_MESSAGES, ensureChannels, PREFER_SMALL_ICON, PRESS_ACTION} from './channels';
 
@@ -137,7 +137,7 @@ export async function notifyVoiceStart(room: Room, member: string, inThatVoice: 
   if (!notificationsOn(s.bgNotifications) || room.key === viewingRoom || inThatVoice) return;
   await ensureChannels();
   const name = room.view?.names[member] ?? fingerprint(member);
-  const roomName = room.view?.name ?? 'Super Chat';
+  const roomName = chatTitle(room) ?? 'Super Chat';
   await notifee.displayNotification({
     id: `voice-${nid(room.key)}`.slice(0, 64),
     title: roomName,

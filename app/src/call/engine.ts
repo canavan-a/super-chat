@@ -149,7 +149,8 @@ export interface VoiceDeps {
   micPermission(): Promise<boolean>;
   getMic(): Promise<StreamLike>;
   createPC(cfg: RTCConfiguration): PCLike;
-  startAudio(onRoute: (r: AudioRoute) => void): () => void;
+  /** Starts call audio; `title` is what the call is called (Android shows it to the system). */
+  startAudio(onRoute: (r: AudioRoute) => void, title: string): () => void;
   setSpeaker(on: boolean): void;
   send(roomKey: string, to: string, s: Signal): boolean;
   settings(): VoiceIceSettings;
@@ -164,7 +165,7 @@ export interface VoiceDeps {
   onStoreChange(l: () => void): () => void;
   /** How many sessions the room's presence says are in its voice (not counting us). */
   presenceCount(roomKey: string): number;
-  /** Android: keeps voice alive in the background (a microphone foreground service). */
+  /** Android: the call notification (Telecom call and foreground service: rtc.ts, call/androidCall.ts). */
   service: {update(view: VoiceView, roomName: string): void; stop(): void};
   /** This device entered (after it told the room) or left a room's voice. */
   onSession?(roomKey: string, action: 'join' | 'leave'): void;
@@ -787,8 +788,9 @@ export function createVoiceEngine(deps: VoiceDeps) {
       });
       return;
     }
-    ses.stopAudio = deps.startAudio(route =>
-      setExtra({route, speakerOn: route === 'speaker'}),
+    ses.stopAudio = deps.startAudio(
+      route => setExtra({route, speakerOn: route === 'speaker'}),
+      roomName(),
     );
     // The platform reports the real route (a headset, if one is connected)
     // right after; until then, assume the default.
