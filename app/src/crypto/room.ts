@@ -2,6 +2,7 @@
 // message encryption, invites, and the batches the server expects.
 import {b64, isId, newId, pubFromMemberId, randomBytes, unb64, unutf8, utf8} from './encoding';
 import {aeadOpen, aeadSeal, edPublicKey, hkdf, seal, sign, unseal, verify} from './primitives';
+import {aeadOpenAsync, aeadSealAsync} from './chunked';
 import {Identity, Member, memberIdentity} from './identity';
 import {
   buildEvents,
@@ -281,3 +282,10 @@ export function joinBatch(
 }
 
 export type {ParsedEvent};
+
+/** encryptBlob/decryptBlob a slice at a time, yielding to the UI between (crypto/chunked.ts). */
+export async function encryptBlobAsync(data: Uint8Array): Promise<{key: Uint8Array; sealed: Uint8Array}> {
+  const key = randomBytes(32);
+  return {key, sealed: await aeadSealAsync(key, data, BLOB_AD)};
+}
+export const decryptBlobAsync = (key: Uint8Array, sealed: Uint8Array): Promise<Uint8Array> => aeadOpenAsync(key, sealed, BLOB_AD);

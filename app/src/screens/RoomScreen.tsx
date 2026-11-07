@@ -54,6 +54,7 @@ import {
   retryUpload,
   discardUpload,
   unreact,
+  namesOf,
   Room,
   roomsReady,
   send,
@@ -105,7 +106,8 @@ export function RoomScreen({
 
   const view = room?.view;
   const isAdmin = !!view?.members.find(m => m.id === meId && m.role === 'admin');
-  const nameOf = useCallback((id: string) => view?.names[id] ?? fingerprint(id), [view]);
+  const names = namesOf(room);
+  const nameOf = useCallback((id: string) => names[id] ?? fingerprint(id), [names]);
 
   useEffect(() => {
     if (!view) return;

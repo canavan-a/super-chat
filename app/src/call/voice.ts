@@ -13,6 +13,7 @@ import {
   onRtc,
   onServerReady,
   postCallNotice,
+  namesOf,
   roomsReady,
   sendRtc,
   subscribe,
@@ -38,7 +39,7 @@ export const voice = createVoiceEngine({
   nameOf: (key, member) => {
     const r = getRoom(key);
     if (!member) return chatTitle(r) ?? '';
-    return r?.view?.names[member] || fingerprint(member);
+    return namesOf(r)[member] || fingerprint(member);
   },
   roomExists: key => !!getRoom(key),
   serverOnline: key => {

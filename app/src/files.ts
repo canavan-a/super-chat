@@ -7,6 +7,7 @@ import {launchImageLibrary} from 'react-native-image-picker';
 import RNFS from 'react-native-fs';
 import {NativeModules} from 'react-native';
 import {base64} from '@scure/base';
+import {b64DecodeAsync, b64EncodeAsync} from './crypto/chunked';
 
 import {unutf8, utf8} from './crypto';
 
@@ -20,7 +21,7 @@ export interface PickedFile {
 
 async function readAndDelete(path: string): Promise<Uint8Array> {
   try {
-    return base64.decode(await RNFS.readFile(path, 'base64'));
+    return await b64DecodeAsync(await RNFS.readFile(path, 'base64'));
   } finally {
     RNFS.unlink(path).catch(() => {});
   }
@@ -95,7 +96,7 @@ export async function saveFileAs(
   const uri = await FileSaver.create(name, mime || 'application/octet-stream');
   if (!uri) return null;
   try {
-    const saved = await FileSaver.write(uri, base64.encode(await makeData()));
+    const saved = await FileSaver.write(uri, await b64EncodeAsync(await makeData()));
     return {name: saved ?? name, location: 'the folder you picked'};
   } catch (e) {
     FileSaver.discard(uri).catch(() => {});
@@ -117,7 +118,7 @@ async function saveViaFilesApp(
   const path = `${dir}/${name.replace(/[/\\]/g, '_')}`;
   await RNFS.mkdir(dir);
   try {
-    await RNFS.writeFile(path, base64.encode(await makeData()), 'base64');
+    await RNFS.writeFile(path, await b64EncodeAsync(await makeData()), 'base64');
     const [res] = await saveDocuments({
       sourceUris: [`file://${encodeURI(path)}`],
       mimeType: mime || 'application/octet-stream',
@@ -195,7 +196,7 @@ export async function pickImages(): Promise<PickedFile[]> {
     out.push({
       name: a.fileName ?? 'image.jpg',
       mime: a.type ?? 'image/jpeg',
-      data: base64.decode(a.base64),
+      data: await b64DecodeAsync(a.base64),
       w: a.width,
       h: a.height,
     });

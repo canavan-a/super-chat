@@ -7,7 +7,7 @@
 // App-private storage, capped by size: the least recently used blobs go
 // first. blobDisk.web.ts is the browser's (no-op) version.
 import RNFS from 'react-native-fs';
-import {base64} from '@scure/base';
+import {b64DecodeAsync, b64EncodeAsync} from './crypto/chunked';
 
 const DIR = `${RNFS.DocumentDirectoryPath}/blobs`;
 /** Total size the cache is trimmed back to. */
@@ -24,7 +24,7 @@ export async function getSealed(blob: string): Promise<Uint8Array | null> {
   try {
     const p = pathOf(blob);
     if (!(await RNFS.exists(p))) return null;
-    const data = base64.decode(await RNFS.readFile(p, 'base64'));
+    const data = await b64DecodeAsync(await RNFS.readFile(p, 'base64'));
     // Mark it recently used, for trimming.
     RNFS.touch(p, new Date(), new Date()).catch(() => {});
     return data;
@@ -37,7 +37,7 @@ export async function getSealed(blob: string): Promise<Uint8Array | null> {
 export async function putSealed(blob: string, sealed: Uint8Array): Promise<void> {
   try {
     await ensureDir();
-    await RNFS.writeFile(pathOf(blob), base64.encode(sealed), 'base64');
+    await RNFS.writeFile(pathOf(blob), await b64EncodeAsync(sealed), 'base64');
     trimSoon();
   } catch {
     // not cached; it'll be downloaded again next time

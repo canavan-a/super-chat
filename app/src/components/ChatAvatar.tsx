@@ -2,7 +2,7 @@ import React, {useEffect, useState} from 'react';
 import {Image, View} from 'react-native';
 
 import {AvatarRef, FileRef} from '../crypto';
-import {chatFaces, getRoom, loadImage, peekImage, useStore} from '../store';
+import {chatFaces, getRoom, namesOf, loadImage, peekImage, useStore} from '../store';
 import {useTheme} from '../theme';
 import {Avatar} from './Avatar';
 
@@ -28,8 +28,14 @@ export function ChatAvatar({
   const theme = useTheme();
   const blob = picture?.blob ?? null;
   const faces = useStore(() => (picture ? [] : chatFaces(getRoom(roomKey))));
-  const names = useStore(() => getRoom(roomKey)?.view?.names);
-  const [uri, setUri] = useState<string | null>(() => (picture ? peekImage(asFile(picture))?.uri ?? null : null));
+  const names = useStore(() => namesOf(getRoom(roomKey)));
+  // Whose picture is up: a row reused for another chat never shows the last one's.
+  const [shown, setShown] = useState<{who: string; uri: string} | null>(() => {
+    const now = picture ? peekImage(asFile(picture)) : null;
+    return now ? {who: roomKey, uri: now.uri} : null;
+  });
+  const setUri = (u: string | null) => setShown(u ? {who: roomKey, uri: u} : null);
+  const uri = shown?.who === roomKey ? shown.uri : null;
 
   useEffect(() => {
     if (!picture) {
@@ -41,10 +47,11 @@ export function ChatAvatar({
       setUri(now.uri);
       return;
     }
-    setUri(null);
+    // A changed picture: the old one stays up until the new one is ready
+    // (no flash back to the initial). A failed load keeps it too.
     let live = true;
     loadImage(roomKey, asFile(picture))
-      .then(shown => live && setUri(shown.uri))
+      .then(img => live && setUri(img.uri))
       .catch(() => {});
     return () => {
       live = false;

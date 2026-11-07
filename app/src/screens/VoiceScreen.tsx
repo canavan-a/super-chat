@@ -29,7 +29,7 @@ import {AMBER} from '../components/VoiceBar';
 import {VoiceControls} from '../components/VoiceControls';
 import {fingerprint} from '../crypto';
 import type {Route} from '../routes';
-import {chatTitle, getRoom, useStore} from '../store';
+import {chatTitle, getRoom, namesOf, useStore} from '../store';
 import {Theme, useTheme} from '../theme';
 
 const CAP = MAX_PEERS + 1;
@@ -60,7 +60,7 @@ export function VoiceScreen({
   const v = useVoice();
   const room = useStore(() => getRoom(roomKey));
   const presence = useStore(() => roomVoice(roomKey));
-  const names = room?.view?.names ?? {};
+  const names = namesOf(room);
   const nameOf = (m: string) => names[m] || fingerprint(m);
   const mine = v.roomKey === roomKey;
   const [sheet, setSheet] = useState<TileData | null>(null);

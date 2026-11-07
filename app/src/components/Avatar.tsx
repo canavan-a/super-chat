@@ -2,7 +2,7 @@ import React, {useEffect, useState} from 'react';
 import {Image, StyleSheet, Text, View} from 'react-native';
 
 import {fingerprint, FileRef} from '../crypto';
-import {getRoom, loadImage, peekImage, useStore} from '../store';
+import {avatarsOf, getRoom, loadImage, peekImage, useStore} from '../store';
 import {useTheme} from '../theme';
 
 const asFile = (r: {blob: string; key: string}): FileRef => ({blob: r.blob, key: r.key, name: 'avatar.jpg', mime: 'image/jpeg', size: 0});
@@ -11,14 +11,22 @@ const asFile = (r: {blob: string; key: string}): FileRef => ({blob: r.blob, key:
  * A member's profile picture in a room, or their initial on a colored disc
  * when they have none (or it hasn't loaded yet). Keyed on the picture's blob
  * id: a changed picture is a new blob, which is what triggers a refetch, and
- * an unchanged one comes straight from memory or the device cache.
+ * an unchanged one comes straight from memory or the device cache. Until the
+ * room's log loads, last launch's picture shows (store.avatarsOf).
  */
 export function Avatar({roomKey, member, name, size = 32}: {roomKey: string; member: string; name?: string | null; size?: number}) {
   const theme = useTheme();
-  const ref = useStore(() => getRoom(roomKey)?.view?.avatars[member] ?? null);
+  const ref = useStore(() => avatarsOf(getRoom(roomKey))[member] ?? null);
   const blob = ref?.blob ?? null;
   // From memory at once when it's been shown before (avatars repeat a lot).
-  const [uri, setUri] = useState<string | null>(() => (ref ? peekImage(asFile(ref))?.uri ?? null : null));
+  // Whose picture is up: a row reused for someone else never shows the last one's.
+  const who = `${roomKey}|${member}`;
+  const [shown, setShown] = useState<{who: string; uri: string} | null>(() => {
+    const now = ref ? peekImage(asFile(ref)) : null;
+    return now ? {who, uri: now.uri} : null;
+  });
+  const setUri = (u: string | null) => setShown(u ? {who, uri: u} : null);
+  const uri = shown?.who === who ? shown.uri : null;
 
   useEffect(() => {
     if (!ref) {
@@ -30,10 +38,11 @@ export function Avatar({roomKey, member, name, size = 32}: {roomKey: string; mem
       setUri(now.uri);
       return;
     }
-    setUri(null);
+    // A changed picture: the old one stays up until the new one is ready
+    // (no flash back to the initial). A failed load keeps it too.
     let live = true;
     loadImage(roomKey, asFile(ref))
-      .then(shown => live && setUri(shown.uri))
+      .then(img => live && setUri(img.uri))
       .catch(() => {});
     return () => {
       live = false;

@@ -13,7 +13,7 @@ import {base64} from '@scure/base';
 
 import {api, ApiError, blobRequest, downloadBlob, uploadBlob} from './api';
 import {clearSealed, getSealed, noteCached, putSealed, removeSealed} from './blobDisk';
-import {dataUri} from './files';
+import {b64EncodeAsync} from './crypto/chunked';
 import {
   aeadOpen,
   aeadSeal,
@@ -24,11 +24,11 @@ import {
   cloneState,
   createInvite,
   createRoomBatch,
-  decryptBlob,
+  decryptBlobAsync,
   extendReplay,
   decryptMessage,
   DecryptedMessage,
-  encryptBlob,
+  encryptBlobAsync,
   encryptMessage,
   FileRef,
   fingerprint,
@@ -147,6 +147,11 @@ export interface Room {
   syncedAt?: number;
   /** Its messages are last launch's (loadMessageCaches), shown until the first open replaces them. */
   fromCache?: boolean;
+  /**
+   * Last launch's member names and pictures (loadMessageCaches): shown until
+   * the log loads and view takes over. Read through namesOf/avatarsOf.
+   */
+  people?: People;
   lastAt: number;
   lastPos: number;
   error: string | null;
@@ -229,11 +234,26 @@ const MSG_CACHE_SIZE = 50;
 interface CachedMessages {
   wipeSeen?: number;
   messages: ChatMessage[];
+  people?: People;
 }
+export interface People {
+  names: Record<string, string>;
+  avatars: Record<string, AvatarRef>;
+}
+const NO_NAMES: Record<string, string> = {};
+const NO_AVATARS: Record<string, AvatarRef> = {};
+/**
+ * Member names and profile pictures to show: the verified log's once it's
+ * loaded, last launch's until then (so a launch opens on faces and names,
+ * not fingerprints). The live ones replace them as soon as they arrive.
+ */
+export const namesOf = (r: Room | undefined): Record<string, string> => r?.view?.names ?? r?.people?.names ?? NO_NAMES;
+export const avatarsOf = (r: Room | undefined): Record<string, AvatarRef> => r?.view?.avatars ?? r?.people?.avatars ?? NO_AVATARS;
 const msgCacheKey = () => hkdf(account().entropy, 'superchat/msg-cache');
 const msgCacheName = (r: Room) => MSG_CACHE_PREFIX + r.key;
-/** The messages array last saved per room, to skip rooms that haven't changed. */
+/** The messages array (and view) last saved per room, to skip rooms that haven't changed. */
 const msgCacheSaved = new Map<string, ChatMessage[]>();
+const peopleSaved = new Map<string, RoomView>();
 
 async function loadMessageCaches(list: Room[]): Promise<void> {
   const empty = list.filter(r => !r.messages.length);
@@ -246,6 +266,7 @@ async function loadMessageCaches(list: Room[]): Promise<void> {
     try {
       const c: CachedMessages = JSON.parse(unutf8(aeadOpen(key, unb64(raw), MSG_CACHE_AD)));
       if (r.wipeSeen === undefined) r.wipeSeen = c.wipeSeen;
+      if (c.people && !r.view) r.people = c.people;
       for (const m of c.messages) ingest(r, m);
       r.fromCache = true;
       msgCacheSaved.set(r.key, r.messages);
@@ -259,20 +280,25 @@ function saveMessageCaches() {
   const key = msgCacheKey();
   for (const r of rooms.values()) {
     // Only the bottom of the chat, as loaded from the server.
-    if (r.hasNewer || r.fromCache || !r.loaded || msgCacheSaved.get(r.key) === r.messages) continue;
+    if (r.hasNewer || r.fromCache || !r.loaded) continue;
+    if (msgCacheSaved.get(r.key) === r.messages && (!r.view || peopleSaved.get(r.key) === r.view)) continue;
     msgCacheSaved.set(r.key, r.messages);
-    const c: CachedMessages = {wipeSeen: r.wipeSeen, messages: r.messages.filter(m => !m.pending).slice(-MSG_CACHE_SIZE)};
+    if (r.view) peopleSaved.set(r.key, r.view);
+    const people = r.view ? {names: r.view.names, avatars: r.view.avatars} : r.people;
+    const c: CachedMessages = {wipeSeen: r.wipeSeen, messages: r.messages.filter(m => !m.pending).slice(-MSG_CACHE_SIZE), people};
     AsyncStorage.setItem(msgCacheName(r), b64(aeadSeal(key, utf8(JSON.stringify(c)), MSG_CACHE_AD))).catch(() => {});
   }
 }
 
 function forgetMessageCache(r: Room) {
   msgCacheSaved.delete(r.key);
+  peopleSaved.delete(r.key);
   AsyncStorage.removeItem(msgCacheName(r)).catch(() => {});
 }
 
 function clearMessageCaches() {
   msgCacheSaved.clear();
+  peopleSaved.clear();
   AsyncStorage.getAllKeys()
     .then(keys => AsyncStorage.multiRemove(keys.filter(k => k.startsWith(MSG_CACHE_PREFIX))))
     .catch(() => {});
@@ -338,7 +364,7 @@ function previewLine(r: Room): string | null {
   let m: ChatMessage | undefined = r.hasNewer ? r.latest : undefined;
   if (!r.hasNewer) for (let i = r.messages.length - 1; i >= 0 && !m; i--) if (!r.messages[i].pending && !isCallNotice(r.messages[i])) m = r.messages[i];
   if (!m) return null;
-  const who = m.sender === r.me.id ? 'You' : (r.view?.names[m.sender] ?? 'Someone');
+  const who = m.sender === r.me.id ? 'You' : (namesOf(r)[m.sender] ?? 'Someone');
   const c = m.content;
   let what = '🔒 Encrypted message';
   if (c?.t === 'text') what = c.body;
@@ -486,6 +512,7 @@ async function loadState(r: Room): Promise<void> {
   r.lastAt = Math.max(r.lastAt, lastAt);
   await loadKeys(r);
   r.view = roomView(r.log, r.keys);
+  r.people = undefined;
   r.error = null;
   r.syncedAt = Date.now();
   // Reload after this returns: openRoom may be the caller, mid-load.
@@ -1577,7 +1604,7 @@ async function syncAvatar(r: Room): Promise<void> {
     return;
   }
   const picture = unb64(mine.data);
-  const {key, sealed} = encryptBlob(picture);
+  const {key, sealed} = await encryptBlobAsync(picture);
   const blob = await uploadBlob(r.server, r.id, r.me, sealed);
   await api.setAvatar(r.server, r.id, r.me, blob);
   putSealed(blob, sealed);
@@ -1662,8 +1689,6 @@ export async function send(key: string, content: MessageContent, blobs: string[]
   if (!k) throw new Error("You don't have this room's key yet.");
   const enc = encryptMessage(r.me, r.id, epoch, k, content);
   const isLine = content.t === 'text' || content.t === 'file' || content.t === 'ice';
-  // Sending from up in a window goes to the bottom, where the message lands.
-  if (isLine && r.hasNewer) await jumpToLatest(key);
   const local: ChatMessage = {
     id: enc.id,
     pos: Number.MAX_SAFE_INTEGER,
@@ -1678,6 +1703,10 @@ export async function send(key: string, content: MessageContent, blobs: string[]
     ingest(r, local);
     emit();
   }
+  // Sending from up in a window goes to the bottom, where the message lands.
+  // The bubble shows first (pending lines survive the swap); the post waits,
+  // so the sent line isn't held back as past the window's end.
+  if (isLine && r.hasNewer) await jumpToLatest(key);
   try {
     const res = await api.post(r.server, r.id, r.me, {id: enc.id, epoch, kind: enc.kind, ct: enc.ct, blobs});
     ingest(r, {...local, pos: res.pos, createdAt: res.createdAt, pending: false});
@@ -1816,9 +1845,9 @@ async function runUpload(u: FileUpload): Promise<void> {
     const worker = async () => {
       for (let i = todo.shift(); i !== undefined; i = todo.shift()) {
         const f = u.files[i];
-        // Let the bubble paint before encrypting, which holds the JS thread briefly.
+        // Let the bubble paint first; encrypting then runs a slice at a time.
         await yieldToUi();
-        const {key: fk, sealed} = encryptBlob(f.data);
+        const {key: fk, sealed} = await encryptBlobAsync(f.data);
         let blob = '';
         for (let tries = 1; !blob; tries++) {
           try {
@@ -1831,6 +1860,9 @@ async function runUpload(u: FileUpload): Promise<void> {
         // What we just sent never needs downloading back.
         putSealed(blob, sealed);
         remember(blob, f.data);
+        // And the picture already on screen keeps showing, not encoded again.
+        const shown = uriCache.get(localBlob(u.id, i));
+        if (shown) rememberUri(blob, shown);
         u.refs[i] = {blob, key: b64(fk), name: f.name, mime: f.mime, size: f.data.length, w: f.w, h: f.h};
         progressed(i, 1);
       }
@@ -1861,19 +1893,20 @@ export async function fetchFile(key: string, ref: FileRef): Promise<Uint8Array> 
   if (!r) throw new Error('room not loaded');
   const fileKey = unb64(ref.key);
   // The device cache holds the sealed blob (blobDisk.ts); a damaged copy just
-  // means downloading it again.
+  // means downloading it again. Decrypting runs a slice at a time
+  // (crypto/chunked.ts): a big file never holds taps up.
   let data: Uint8Array | null = null;
   const onDisk = await getSealed(ref.blob);
   if (onDisk) {
     try {
-      data = decryptBlob(fileKey, onDisk);
+      data = await decryptBlobAsync(fileKey, onDisk);
     } catch {
       data = null;
     }
   }
   if (!data) {
     const sealed = await downloadBlob(r.server, r.id, r.me, ref.blob);
-    data = decryptBlob(fileKey, sealed);
+    data = await decryptBlobAsync(fileKey, sealed);
     putSealed(ref.blob, sealed);
   }
   remember(ref.blob, data);
@@ -1901,14 +1934,13 @@ export interface ShownImage {
   uri: string;
 }
 
-/** An image ready in memory, synchronously; null if it needs loading. */
+/**
+ * An image ready to show right now, synchronously; null if it needs loading.
+ * Only finished URIs: encoding one is real work, and this runs mid-render.
+ */
 export function peekImage(ref: FileRef): ShownImage | null {
-  let uri = uriCache.get(ref.blob);
-  if (!uri) {
-    const data = blobCache.get(ref.blob);
-    if (!data) return null;
-    uri = dataUri(ref.mime, data);
-  }
+  const uri = uriCache.get(ref.blob);
+  if (!uri) return null;
   rememberUri(ref.blob, uri);
   return {uri};
 }
@@ -1916,13 +1948,14 @@ export function peekImage(ref: FileRef): ShownImage | null {
 interface BlobNative {
   open(blob: string, url: string, headers: Record<string, string>, key: string, mime: string): Promise<string>;
 }
-const NativeBlob = Platform.OS === 'android' ? (NativeModules.Blob as BlobNative | undefined) : undefined;
+const NativeBlob = Platform.OS === 'android' || Platform.OS === 'ios' ? (NativeModules.Blob as BlobNative | undefined) : undefined;
 
 /**
  * An image ready to show: from memory, or else loaded from the device cache
- * or the server. On Android that whole load (download, decrypt, encode) runs
- * natively off the JS thread (BlobModule.kt), so taps never wait on it; the
- * JS path is the fallback (older Android, the browser).
+ * or the server. On Android and iOS that whole load (download, decrypt,
+ * encode) runs natively off the JS thread (BlobModule.kt, BlobModule.m).
+ * Elsewhere (the browser, older Android) it runs in JS a slice at a time, a
+ * couple of images at once, so a screen full of pictures never holds taps up.
  */
 export function loadImage(key: string, ref: FileRef): Promise<ShownImage> {
   const ready = peekImage(ref);
@@ -1938,10 +1971,26 @@ export function loadImage(key: string, ref: FileRef): Promise<ShownImage> {
 }
 const imageLoads = new Map<string, Promise<ShownImage>>();
 
+/** JS image loads running at once: each is slices of CPU work, interleaved with the UI's. */
+const JS_IMAGE_LOADS = 2;
+let jsImageLoads = 0;
+const jsImageQueue: (() => void)[] = [];
+async function inJsImageSlot<T>(job: () => Promise<T>): Promise<T> {
+  if (jsImageLoads >= JS_IMAGE_LOADS) await new Promise<void>(res => jsImageQueue.push(res));
+  jsImageLoads++;
+  try {
+    return await job();
+  } finally {
+    jsImageLoads--;
+    jsImageQueue.shift()?.();
+  }
+}
+
 async function loadImageOnce(key: string, ref: FileRef): Promise<ShownImage> {
   const r = rooms.get(key);
   if (!r) throw new Error('room not loaded');
-  if (NativeBlob) {
+  const held = localFile(ref.blob) ?? blobCache.get(ref.blob);
+  if (!held && NativeBlob) {
     const req = blobRequest(r.server, r.id, r.me, ref.blob);
     try {
       const uri = await NativeBlob.open(ref.blob, req.url, req.headers, base64.encode(unb64(ref.key)), ref.mime);
@@ -1952,8 +2001,12 @@ async function loadImageOnce(key: string, ref: FileRef): Promise<ShownImage> {
       if ((e as {code?: string}).code !== 'E_UNSUPPORTED') throw e;
     }
   }
-  await fetchFile(key, ref);
-  return peekImage(ref)!;
+  return inJsImageSlot(async () => {
+    const data = held ?? (await fetchFile(key, ref));
+    const uri = `data:${ref.mime};base64,${await b64EncodeAsync(data)}`;
+    rememberUri(ref.blob, uri);
+    return {uri};
+  });
 }
 
 /**
@@ -2059,7 +2112,7 @@ export async function setRoomPicture(key: string, jpeg: Uint8Array | null): Prom
   const r = rooms.get(key)!;
   let picture: AvatarRef | null = null;
   if (jpeg) {
-    const {key: fk, sealed} = encryptBlob(jpeg);
+    const {key: fk, sealed} = await encryptBlobAsync(jpeg);
     const blob = await uploadBlob(r.server, r.id, r.me, sealed);
     await api.setPicture(r.server, r.id, r.me, blob);
     putSealed(blob, sealed);

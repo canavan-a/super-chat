@@ -9,7 +9,7 @@ import {fingerprint} from '../crypto';
 import {isSideload} from '../distribution';
 import {rgbToHex, themeAccent} from '../logo/logoTheme';
 import {settingsStore} from '../settings';
-import {chatTitle, type ChatMessage, type Room} from '../store';
+import {chatTitle, namesOf, type ChatMessage, type Room} from '../store';
 import {THEMES} from '../theme';
 import {CH_MESSAGES, ensureChannels, PREFER_SMALL_ICON, PRESS_ACTION} from './channels';
 
@@ -56,7 +56,7 @@ export async function notifyMessage(room: Room, msg: ChatMessage): Promise<void>
   await ensureChannels();
   const c = msg.content;
   const line: Line = {
-    sender: room.view?.names[msg.sender] ?? fingerprint(msg.sender),
+    sender: namesOf(room)[msg.sender] ?? fingerprint(msg.sender),
     text: (
       c?.t === 'text' ? c.body : c?.t === 'file' ? c.body || '📎 Attachment' : c?.t === 'ice' ? '🔊 Shared a voice server' : '🔒 Message'
     ).slice(0, 300),
@@ -136,7 +136,7 @@ export async function notifyVoiceStart(room: Room, member: string, inThatVoice: 
   const s = settingsStore.get();
   if (!notificationsOn(s.bgNotifications) || room.key === viewingRoom || inThatVoice) return;
   await ensureChannels();
-  const name = room.view?.names[member] ?? fingerprint(member);
+  const name = namesOf(room)[member] ?? fingerprint(member);
   const roomName = chatTitle(room) ?? 'Super Chat';
   await notifee.displayNotification({
     id: `voice-${nid(room.key)}`.slice(0, 64),
