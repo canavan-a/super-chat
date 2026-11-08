@@ -772,6 +772,18 @@ export function SettingsScreen({
       )}
 
       <View style={styles.divider} />
+      <Text style={styles.title2}>Content filter</Text>
+      <View style={styles.rowBetween}>
+        <View style={styles.rowBetweenText}>
+          <Text style={styles.label}>Filter objectionable words</Text>
+          <Text style={styles.hint}>
+            Shows swear words and slurs in messages as ****. Only changes what you see on this device.
+          </Text>
+        </View>
+        <Switch value={s.filterWords} onValueChange={v => settingsStore.update({filterWords: v})} />
+      </View>
+
+      <View style={styles.divider} />
       <Text style={styles.title2}>Help</Text>
       <Text style={styles.hint}>
         Questions, problems, or someone breaking the rules? Reports reach us by email; we can't read your messages, so

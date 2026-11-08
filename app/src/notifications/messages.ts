@@ -8,6 +8,7 @@ import {NativeModules} from 'react-native';
 import {fingerprint} from '../crypto';
 import {isSideload} from '../distribution';
 import {rgbToHex, themeAccent} from '../logo/logoTheme';
+import {censor} from '../moderation/wordFilter';
 import {settingsStore} from '../settings';
 import {chatTitle, namesOf, type ChatMessage, type Room} from '../store';
 import {THEMES} from '../theme';
@@ -57,8 +58,8 @@ export async function notifyMessage(room: Room, msg: ChatMessage): Promise<void>
   const c = msg.content;
   const line: Line = {
     sender: namesOf(room)[msg.sender] ?? fingerprint(msg.sender),
-    text: (
-      c?.t === 'text' ? c.body : c?.t === 'file' ? c.body || '📎 Attachment' : c?.t === 'ice' ? '🔊 Shared a voice server' : '🔒 Message'
+    text: censor(
+      c?.t === 'text' ? c.body : c?.t === 'file' ? c.body || '📎 Attachment' : c?.t === 'ice' ? '🔊 Shared a voice server' : '🔒 Message',
     ).slice(0, 300),
     at: msg.createdAt,
   };

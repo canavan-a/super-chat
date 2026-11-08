@@ -9,6 +9,7 @@ import {Overlay} from '../components/Overlay';
 import {PixelField} from '../components/PixelField';
 import {SpringyPull} from '../components/SpringyPull';
 import {tick} from '../haptics';
+import {censor, useFilterWords} from '../moderation/wordFilter';
 import {platformConfirm} from '../platformConfirm';
 import {Route} from '../routes';
 import {getRoom, leave, refreshAll, RoomListItem, useStore} from '../store';
@@ -31,6 +32,7 @@ export function RoomListScreen({
   const theme = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const [addOpen, setAddOpen] = useState(false);
+  const filter = useFilterWords();
   const scrollY = useRef(0);
   const showServer = new Set(rooms.map(r => r.server)).size > 1;
   useVoice();
@@ -123,7 +125,7 @@ export function RoomListScreen({
                   <View style={styles.rowBottom}>
                     <Text style={[styles.rowPreview, unread && styles.rowPreviewUnread]} numberOfLines={1}>
                       {showServer ? item.server.replace(/^https?:\/\//, '') + ' · ' : ''}
-                      {item.preview ?? (unread ? 'New messages' : 'No messages yet')}
+                      {item.preview ? censor(item.preview, filter) : unread ? 'New messages' : 'No messages yet'}
                     </Text>
                     {unread && (
                       <View style={styles.badge}>

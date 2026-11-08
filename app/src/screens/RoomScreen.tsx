@@ -25,6 +25,8 @@ import {IceServerCard} from '../components/IceServerCard';
 import {ImageViewer} from '../components/ImageViewer';
 import {Overlay} from '../components/Overlay';
 import {MarkdownText} from '../components/Markdown';
+import {hideMessage, useHidden} from '../moderation/hidden';
+import {censor, useFilterWords} from '../moderation/wordFilter';
 import {TypingDots} from '../components/TypingDots';
 import {VoiceStrip} from '../components/VoiceStrip';
 import {tick} from '../haptics';
@@ -259,7 +261,7 @@ export function RoomScreen({
           <View style={styles.replyBarText}>
             <Text style={styles.replyBarName}>Replying to {replyTo.sender === meId ? 'yourself' : nameOf(replyTo.sender)}</Text>
             <Text style={styles.replyBarBody} numberOfLines={1}>
-              {previewText(replyTo)}
+              {censor(previewText(replyTo))}
             </Text>
           </View>
           <Pressable onPress={() => setReplyTo(null)} hitSlop={8}>
@@ -403,7 +405,11 @@ function ChatList({
   };
   const loadingOlderRef = useRef(false);
 
-  const messages = room.messages;
+  const hidden = useHidden(room.key);
+  const messages = useMemo(
+    () => (hidden.size ? room.messages.filter(m => !hidden.has(m.id)) : room.messages),
+    [room.messages, hidden],
+  );
   const byId = useMemo(() => new Map(messages.map(m => [m.id, m])), [messages]);
 
   // Who has read up to which message: shown under the newest message they've
@@ -710,6 +716,19 @@ function ChatList({
                 </Pressable>
               </>
             ) : null}
+            {Platform.OS === 'ios' && menuFor && menuFor.sender !== meId && (
+              <>
+                <View style={styles.menuDivider} />
+                <Pressable
+                  style={styles.menuRow}
+                  onPress={() => {
+                    hideMessage(room.key, menuFor!.id);
+                    setMenuFor(null);
+                  }}>
+                  <Text style={styles.menuRowText}>Hide message</Text>
+                </Pressable>
+              </>
+            )}
             {menuFor && (menuFor.sender === meId || isAdmin) && (
               <>
                 <View style={styles.menuDivider} />
@@ -934,6 +953,7 @@ const MessageRow = React.memo(function MessageRow({
   onAvatarPress?: () => void;
 }): React.JSX.Element {
   const c = msg.content;
+  const filter = useFilterWords();
   const textColor = mine ? theme.bubbleUserText : theme.bubbleAssistantText;
   const time = chatTime(msg.createdAt);
 
@@ -1008,7 +1028,7 @@ const MessageRow = React.memo(function MessageRow({
                 <Text style={[styles.quoteName, {color: textColor}]}>{nameOf(reply.sender)}</Text>
                 <Text style={[styles.quoteText, {color: textColor}]} numberOfLines={2}>
                   {reply.content?.t === 'text'
-                    ? reply.content.body
+                    ? censor(reply.content.body, filter)
                     : reply.content?.t === 'file'
                       ? '📎 Attachment'
                       : reply.content?.t === 'ice'

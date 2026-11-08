@@ -4,6 +4,7 @@ import React, {useMemo} from 'react';
 import {Linking, StyleSheet, Text} from 'react-native';
 
 import {InlineRun, parseMarkdown} from '../markdown';
+import {censor, useFilterWords} from '../moderation/wordFilter';
 
 const HEADING_STYLES: Record<number, object> = {
   1: {fontSize: 18, fontWeight: '800'},
@@ -21,7 +22,13 @@ export const MarkdownText = React.memo(function MarkdownText({
   /** A link takes the touch from whatever it sits in, so pass that long-press on. */
   onLinkLongPress?: () => void;
 }): React.JSX.Element {
-  const segments = useMemo(() => parseMarkdown(text), [text]);
+  const filter = useFilterWords();
+  // Masked after parsing, so a link keeps its real URL.
+  const segments = useMemo(
+    () =>
+      parseMarkdown(text).map(seg => ({...seg, runs: seg.runs.map(run => ({...run, value: censor(run.value, filter)}))})),
+    [text, filter],
+  );
   const textStyle = [styles.text, {color}];
   return (
     <>

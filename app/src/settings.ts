@@ -54,6 +54,9 @@ export interface Settings {
   iceServers: IceServerEntry[];
   // Send all voice through a TURN relay, so peers never see this device's IP.
   relayOnlyVoice: boolean;
+  // Mask listed swear words and slurs in messages (src/moderation). Only
+  // changes what this device shows.
+  filterWords: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -73,6 +76,7 @@ const DEFAULT_SETTINGS: Settings = {
   lastRoom: null,
   iceServers: DEFAULT_ICE_SERVERS,
   relayOnlyVoice: false,
+  filterWords: true,
 };
 
 type Listener = (settings: Settings) => void;
