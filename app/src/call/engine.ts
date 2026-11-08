@@ -169,6 +169,8 @@ export interface VoiceDeps {
   service: {update(view: VoiceView, roomName: string): void; stop(): void};
   /** This device entered (after it told the room) or left a room's voice. */
   onSession?(roomKey: string, action: 'join' | 'leave'): void;
+  /** The short sound for someone else joining (first connected) or leaving the call (call/cues.ts). */
+  cue?(cue: 'join' | 'leave'): void;
   randomId(): string;
   now(): number;
 }
@@ -407,7 +409,7 @@ export function createVoiceEngine(deps: VoiceDeps) {
         return;
       case 'leave':
         if (peer) {
-          dropPeer(peer);
+          peerLeft(peer);
           notify();
         }
         return;
@@ -516,6 +518,8 @@ export function createVoiceEngine(deps: VoiceDeps) {
     if (!session?.peers.has(p.id)) return;
     p.conn = p.pc.connectionState;
     if (p.conn === 'connected') {
+      // Only the first time: an ICE restart reconnecting isn't a join.
+      if (!p.everConnected) cue('join');
       p.everConnected = true;
       p.restarts = 0;
       p.failed = false;
@@ -584,7 +588,7 @@ export function createVoiceEngine(deps: VoiceDeps) {
     const cfg = session.cfg;
     const name = deps.nameOf(session.roomKey, p.member);
     if (p.everConnected) {
-      dropPeer(p);
+      peerLeft(p);
       flash(`${name} dropped`);
       return;
     }
@@ -599,6 +603,17 @@ export function createVoiceEngine(deps: VoiceDeps) {
       name,
     );
     notify();
+  }
+
+  /** Join/leave sounds, unless sound is off (deafened). */
+  function cue(c: 'join' | 'leave') {
+    if (session && !session.deafened) deps.cue?.(c);
+  }
+
+  /** Someone left the call while we stay in it: drop them, with the leave sound if they'd been heard. */
+  function peerLeft(p: Peer) {
+    if (p.everConnected) cue('leave');
+    dropPeer(p);
   }
 
   function dropPeer(p: Peer) {
@@ -862,7 +877,7 @@ export function createVoiceEngine(deps: VoiceDeps) {
     let local: number | null = null;
     for (const p of [...ses.peers.values()]) {
       if (now - p.lastHeard > PRESENCE_MS) {
-        dropPeer(p);
+        peerLeft(p);
         if (p.everConnected)
           flash(`${deps.nameOf(ses.roomKey, p.member)} dropped`);
         continue;

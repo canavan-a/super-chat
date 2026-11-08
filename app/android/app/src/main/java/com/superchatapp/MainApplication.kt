@@ -24,6 +24,7 @@ class MainApplication : Application(), ReactApplication {
               add(ImageCropPackage())
               add(BlobPackage())
               add(VoiceCallPackage())
+              add(CallCuePackage())
             }
 
         override fun getJSMainModuleName(): String = "index"

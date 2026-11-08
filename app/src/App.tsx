@@ -47,7 +47,7 @@ import {PrivacyPolicy, TermsOfUse} from './privacy/PrivacyPolicy';
 import {VoiceScreen} from './screens/VoiceScreen';
 import {VoiceBar} from './components/VoiceBar';
 import {session} from './session';
-import {settingsStore} from './settings';
+import {LOCK_NEVER, settingsStore} from './settings';
 import {getRoom, refreshAll, refreshRooms, resetStore, roomList, roomsReady, serverStatus, useStore} from './store';
 import {Theme, ThemeProvider, useTheme} from './theme';
 
@@ -112,7 +112,8 @@ function AccountGate(): React.JSX.Element {
       } else if (state === 'active' && backgroundedAt.current !== null) {
         const away = Date.now() - backgroundedAt.current;
         backgroundedAt.current = null;
-        if (session.get() && away >= settingsStore.get().lockAfterMin * 60_000) {
+        const after = settingsStore.get().lockAfterMin;
+        if (session.get() && after !== LOCK_NEVER && away >= after * 60_000) {
           setGate(g => (g === 'ready' ? 'locked' : g));
         }
       }

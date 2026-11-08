@@ -1,10 +1,12 @@
-// The content filter's word list (see wordFilter.ts): slurs and the most
-// explicit swearing. Kept short on purpose, so it doesn't catch everyday
-// words. Lower case, no regex characters.
+// The content filter's built-in list (see wordFilter.ts): slurs and the most
+// explicit swearing. Never shown in the app; it's used only when someone
+// turns on "Filter slurs and profanity" in Settings → Content filter.
+// Each entry matches as a whole word, ignoring case.
 
-/** Matched as whole words only, so "spic" doesn't hit "spicy". */
-export const WORDS = [
+export const BUILT_IN_WORDS = [
   // swearing
+  'fuck', 'fucks', 'fucked', 'fucker', 'fuckers', 'fucking', 'fuckin',
+  'motherfucker', 'motherfuckers', 'motherfucking',
   'shit', 'shits', 'shitty', 'shitting', 'shithead', 'shitheads', 'bullshit',
   'cunt', 'cunts',
   'bitch', 'bitches', 'bitching',
@@ -29,6 +31,3 @@ export const WORDS = [
   'wetback', 'wetbacks',
   'raghead', 'ragheads',
 ];
-
-/** Matched inside any word ("motherfucker", "fuckin'"). Only roots no ordinary word contains. */
-export const ROOTS = ['fuck'];

@@ -306,6 +306,7 @@ interface Client {
   pcs: FakePC[];
   mic: FakeTrack | null;
   sent: {to: string; k: string}[];
+  cues: string[];
 }
 
 async function flush() {
@@ -328,7 +329,7 @@ function network(
     const pcs: FakePC[] = [];
     const ls = new Set<(k: string, f: string, s: any) => void>();
     listeners.set(member, ls);
-    const c: Client = {member, engine: null as any, pcs, mic: null, sent: []};
+    const c: Client = {member, engine: null as any, pcs, mic: null, sent: [], cues: []};
     const deps: VoiceDeps = {
       unsupported: () => null,
       micPermission: async () => true,
@@ -371,6 +372,7 @@ function network(
           ((c as any).serviceCalls ??= []).push(c.mic ? 'mic-open' : 'no-mic'),
         stop() {},
       },
+      cue: k => c.cues.push(k),
       randomId: () => `${member}-s${n++}`,
       now: () => Date.now(),
     };
@@ -660,5 +662,36 @@ describe('voiceSummary', () => {
     expect(voiceSummary(1, true)).toBe('You and 1 other');
     expect(voiceSummary(3, true)).toBe('You and 3 others');
     expect(voiceSummary(2, false)).toBe('2 in voice');
+  });
+});
+
+describe('call sounds', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  it('plays join once someone is heard, leave when they go, and nothing while sound is off', async () => {
+    const net = network();
+    const a = net.add('A');
+    const b = net.add('B');
+    await join(a);
+    jest.advanceTimersByTime(FIND_MS);
+    await join(b);
+    await flush();
+    expect(a.cues).toEqual([]); // not until they're actually connected
+    connectAll(a, b);
+    expect(a.cues).toEqual(['join']);
+    expect(b.cues).toEqual(['join']);
+    await b.engine.leave();
+    await flush();
+    expect(a.cues).toEqual(['join', 'leave']);
+    expect(b.cues).toEqual(['join']); // leaving yourself plays nothing
+  });
+
+  it('makes a short WAV that climbs for join and falls for leave', () => {
+    const {cueWav, cueSamples} = require('../src/call/cues');
+    const wav: Uint8Array = cueWav('join');
+    expect(String.fromCharCode(...wav.slice(0, 4))).toBe('RIFF');
+    expect(cueSamples('join').length / 22050).toBeLessThan(0.4);
+    expect(cueSamples('leave').length).toBe(cueSamples('join').length);
   });
 });

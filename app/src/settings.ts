@@ -8,6 +8,9 @@ export const DEFAULT_SERVER = 'https://chat.superbadger.io';
 
 const STORAGE_KEY = 'superchat.settings.v1';
 
+/** lockAfterMin's "Never": no re-lock from time in the background (JSON has no Infinity). */
+export const LOCK_NEVER = -1;
+
 /** The quick reactions: the long-press menu, and the choices for double-tap. */
 export const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
 
@@ -32,7 +35,7 @@ export interface Settings {
   // the default.
   previewsDefaultOn: boolean;
   // Minutes in the background before the app asks for biometrics again.
-  // 0 = every time it's reopened.
+  // 0 = every time it's reopened; LOCK_NEVER = only after a cold start.
   lockAfterMin: number;
   // Android-only: switch the launcher icon to the one matching the current
   // theme (see src/appIcon.ts).
@@ -54,9 +57,14 @@ export interface Settings {
   iceServers: IceServerEntry[];
   // Send all voice through a TURN relay, so peers never see this device's IP.
   relayOnlyVoice: boolean;
-  // Mask listed swear words and slurs in messages (src/moderation). Only
-  // changes what this device shows.
+  // Mask the words on filterList in messages (src/moderation). Only changes
+  // what this device shows.
   filterWords: boolean;
+  // This person's own filter list, edited in Settings → Content filter.
+  // Starts empty: only the words they add.
+  filterList: string[];
+  // Also filter the built-in list of slurs and profanity (never shown).
+  filterBuiltIn: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -68,7 +76,7 @@ const DEFAULT_SETTINGS: Settings = {
   notifPreviews: true,
   previewsDefaultOn: true,
   doubleTapReaction: '❤️',
-  lockAfterMin: 1,
+  lockAfterMin: 1440,
   themedIcon: true,
   launchSplash: true,
   splashStrikes: 0,
@@ -76,7 +84,9 @@ const DEFAULT_SETTINGS: Settings = {
   lastRoom: null,
   iceServers: DEFAULT_ICE_SERVERS,
   relayOnlyVoice: false,
-  filterWords: true,
+  filterWords: false,
+  filterList: [],
+  filterBuiltIn: false,
 };
 
 type Listener = (settings: Settings) => void;

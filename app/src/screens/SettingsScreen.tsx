@@ -28,11 +28,14 @@ import {
 import {exportKeyFile, phraseFromEntropy} from '../crypto';
 import {AvatarSource, dataUri, pickAvatarSource, saveTextFileAs} from '../files';
 import {AvatarCropper} from '../components/AvatarCropper';
+import {Icon} from '../components/Icon';
 import {Notice} from '../components/Notice';
+import {Overlay} from '../components/Overlay';
+import {cleanWord} from '../moderation/wordFilter';
 import {forgetIdentity, loadIdentity, NEEDS_PASSPHRASE} from '../keystore';
 import {platformConfirm} from '../platformConfirm';
 import {session} from '../session';
-import {DEFAULT_SERVER, normalizeServer, QUICK_REACTIONS, settingsStore} from '../settings';
+import {DEFAULT_SERVER, LOCK_NEVER, normalizeServer, QUICK_REACTIONS, settingsStore} from '../settings';
 import {deleteAccount, getMyAvatar, resetStore, setMyAvatar, useStore} from '../store';
 import {THEME_OPTIONS, Theme, useThemeSetting} from '../theme';
 import {VoiceSettings} from '../components/VoiceSettings';
@@ -52,7 +55,13 @@ const LOCK_OPTIONS = [
   {min: 0, label: 'Immediately'},
   {min: 1, label: '1 min'},
   {min: 5, label: '5 min'},
+  {min: 15, label: '15 min'},
   {min: 30, label: '30 min'},
+  {min: 60, label: '1 hour'},
+  {min: 240, label: '4 hours'},
+  {min: 1440, label: '1 day'},
+  {min: 10080, label: '1 week'},
+  {min: LOCK_NEVER, label: 'Never'},
 ];
 
 
@@ -85,6 +94,16 @@ export function SettingsScreen({
   const styles = makeStyles(theme);
   const [tab, setTab] = useState<SettingsTab>('general');
   const [s, setS] = useState(settingsStore.get());
+  const [lockPicker, setLockPicker] = useState(false);
+  const lockLabel = LOCK_OPTIONS.find(o => o.min === s.lockAfterMin)?.label ?? `${s.lockAfterMin} min`;
+  const [wordsOpen, setWordsOpen] = useState(false);
+  const [newWord, setNewWord] = useState('');
+  const addWord = () => {
+    const w = cleanWord(newWord);
+    if (!w) return;
+    if (!s.filterList.includes(w)) settingsStore.update({filterList: [...s.filterList, w]});
+    setNewWord('');
+  };
   useEffect(() => settingsStore.subscribe(setS), []);
 
   // ---- servers ----
@@ -625,18 +644,43 @@ export function SettingsScreen({
 
           {Platform.OS !== 'web' && (
             <>
-              <Text style={styles.label}>Lock after</Text>
-              <View style={styles.themeRow}>
-                {LOCK_OPTIONS.map(o => (
-                  <Pressable
-                    key={o.min}
-                    style={[styles.testButton, s.lockAfterMin === o.min && styles.chipOn]}
-                    onPress={() => settingsStore.update({lockAfterMin: o.min})}>
-                    <Text style={[styles.testButtonText, s.lockAfterMin === o.min && styles.chipOnText]}>{o.label}</Text>
-                  </Pressable>
-                ))}
+              <View style={styles.rowBetween}>
+                <View style={styles.rowBetweenText}>
+                  <Text style={styles.label}>Lock after</Text>
+                  <Text style={styles.hint}>
+                    How long Super Chat can be in the background before it asks for your{' '}
+                    {Platform.OS === 'ios' ? 'Face ID or passcode' : 'fingerprint or PIN'}.
+                    {s.lockAfterMin === LOCK_NEVER ? ' With Never, it still asks once each time the app is fully closed and reopened.' : ''}
+                  </Text>
+                </View>
+                <Pressable
+                  style={[styles.testButton, styles.pickerButton]}
+                  onPress={() => setLockPicker(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Lock after: ${lockLabel}`}>
+                  <Text style={styles.testButtonText}>{lockLabel}</Text>
+                  <Icon name="chevron-down" size={14} color={theme.textMuted} />
+                </Pressable>
               </View>
-              <Text style={styles.hint}>How long Super Chat can be in the background before it asks for your {Platform.OS === 'ios' ? 'Face ID or passcode' : 'fingerprint or PIN'}.</Text>
+              <Overlay visible={lockPicker} onClose={() => setLockPicker(false)} style={styles.sheetBackdrop} modal>
+                <View style={styles.sheet}>
+                  <Text style={styles.sheetTitle}>Lock after</Text>
+                  {LOCK_OPTIONS.map(o => (
+                    <Pressable
+                      key={o.min}
+                      style={styles.sheetRow}
+                      onPress={() => {
+                        settingsStore.update({lockAfterMin: o.min});
+                        setLockPicker(false);
+                      }}
+                      accessibilityRole="button"
+                      accessibilityState={{selected: s.lockAfterMin === o.min}}>
+                      <Text style={styles.sheetRowText}>{o.label}</Text>
+                      {s.lockAfterMin === o.min && <Icon name="check" size={16} color={theme.primary} />}
+                    </Pressable>
+                  ))}
+                </View>
+              </Overlay>
             </>
           )}
 
@@ -776,12 +820,80 @@ export function SettingsScreen({
       <View style={styles.rowBetween}>
         <View style={styles.rowBetweenText}>
           <Text style={styles.label}>Filter objectionable words</Text>
-          <Text style={styles.hint}>
-            Shows swear words and slurs in messages as ****. Only changes what you see on this device.
-          </Text>
+          <Text style={styles.hint}>Shows filtered words as **** in messages. Only changes what you see on this device.</Text>
         </View>
         <Switch value={s.filterWords} onValueChange={v => settingsStore.update({filterWords: v})} />
       </View>
+      {s.filterWords && (
+        <>
+          <View style={styles.rowBetween}>
+            <View style={styles.rowBetweenText}>
+              <Text style={styles.label}>Filter slurs and profanity</Text>
+              <Text style={styles.hint}>Also filter a built-in list of common slurs and swear words.</Text>
+            </View>
+            <Switch value={s.filterBuiltIn} onValueChange={v => settingsStore.update({filterBuiltIn: v})} />
+          </View>
+          <View style={styles.rowBetween}>
+            <View style={styles.rowBetweenText}>
+              <Text style={styles.label}>Your word list</Text>
+              <Text style={styles.hint}>
+                {s.filterList.length === 0 ? 'Empty' : `${s.filterList.length} word${s.filterList.length === 1 ? '' : 's'}`}.
+                Words and phrases you add yourself.
+              </Text>
+            </View>
+            <Pressable style={[styles.testButton, styles.pickerButton]} onPress={() => setWordsOpen(true)} accessibilityRole="button">
+              <Text style={styles.testButtonText}>Edit</Text>
+            </Pressable>
+          </View>
+        </>
+      )}
+      <Overlay visible={wordsOpen} onClose={() => setWordsOpen(false)} style={styles.sheetBackdrop} modal>
+        <View style={[styles.sheet, styles.wordsSheet]}>
+          <View style={styles.wordsHeader}>
+            <Text style={styles.sheetTitle}>Your word list</Text>
+            <Pressable onPress={() => setWordsOpen(false)} hitSlop={8} accessibilityLabel="Done">
+              <Text style={[styles.testButtonText, {color: theme.primary}]}>Done</Text>
+            </Pressable>
+          </View>
+          <View style={styles.wordsAdd}>
+            <TextInput
+              style={[styles.input, styles.wordsInput]}
+              value={newWord}
+              onChangeText={setNewWord}
+              onSubmitEditing={addWord}
+              placeholder="Add a word or phrase"
+              placeholderTextColor={theme.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="done"
+            />
+            <Pressable style={[styles.testButton, styles.pickerButton]} onPress={addWord} disabled={!cleanWord(newWord)}>
+              <Text style={styles.testButtonText}>Add</Text>
+            </Pressable>
+          </View>
+          <ScrollView style={styles.wordsScroll} contentContainerStyle={styles.wordsChips} keyboardShouldPersistTaps="handled">
+            {s.filterList.length === 0 ? (
+              <Text style={styles.hint}>No words yet. Add any word or phrase you don't want to see.</Text>
+            ) : (
+              [...s.filterList].sort().map(w => (
+                <Pressable
+                  key={w}
+                  style={[styles.testButton, styles.wordChip]}
+                  onPress={() => settingsStore.update({filterList: s.filterList.filter(x => x !== w)})}
+                  accessibilityLabel={`Remove ${w}`}>
+                  <Text style={styles.testButtonText}>{w}</Text>
+                  <Icon name="close" size={12} color={theme.textMuted} />
+                </Pressable>
+              ))
+            )}
+          </ScrollView>
+          <View style={styles.wordsFooter}>
+            <Pressable onPress={() => settingsStore.update({filterList: []})} disabled={s.filterList.length === 0}>
+              <Text style={[styles.hint, styles.underline]}>Clear all</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Overlay>
 
       <View style={styles.divider} />
       <Text style={styles.title2}>Help</Text>
@@ -1052,6 +1164,31 @@ function makeStyles(theme: Theme) {
     chipOn: {
       backgroundColor: theme.primary,
     },
+    pickerButton: {flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'center'},
+    sheetBackdrop: {justifyContent: 'flex-end', padding: 12},
+    sheet: {
+      borderRadius: 12,
+      backgroundColor: theme.surface,
+      borderWidth: 1,
+      borderColor: theme.border,
+      overflow: 'hidden',
+      maxWidth: 480,
+      width: '100%',
+      alignSelf: 'center',
+      paddingVertical: 6,
+    },
+    sheetTitle: {fontSize: 13, fontWeight: '700', color: theme.textMuted, paddingHorizontal: 16, paddingVertical: 8},
+    sheetRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12},
+    sheetRowText: {fontSize: 15, fontWeight: '600', color: theme.text},
+    wordsSheet: {maxHeight: '80%'},
+    wordsHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingRight: 16},
+    wordsAdd: {flexDirection: 'row', gap: 8, alignItems: 'center', paddingHorizontal: 16, paddingBottom: 8},
+    wordsInput: {flex: 1, marginBottom: 0},
+    wordsScroll: {flexGrow: 0},
+    wordsChips: {flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 16, paddingVertical: 8},
+    wordChip: {flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 5},
+    wordsFooter: {flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 16, paddingVertical: 10},
+    underline: {textDecorationLine: 'underline'},
     chipOnText: {
       color: theme.primaryText,
     },

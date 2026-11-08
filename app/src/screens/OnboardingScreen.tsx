@@ -431,15 +431,17 @@ function ConfirmPhrase({
   );
 }
 
-function ImportPhrase({
+export function ImportPhrase({
   styles,
   theme,
   error,
+  submitLabel = 'Restore account',
   onOk,
 }: {
   styles: Styles;
   theme: Theme;
   error: string | null;
+  submitLabel?: string;
   onOk: (phrase: string) => void;
 }) {
   const [text, setText] = useState('');
@@ -465,7 +467,7 @@ function ImportPhrase({
         </Notice>
       )}
       <Pressable style={[styles.primary, count !== 24 && styles.disabled]} disabled={count !== 24} onPress={() => onOk(text)}>
-        <Text style={styles.primaryText}>Restore account</Text>
+        <Text style={styles.primaryText}>{submitLabel}</Text>
       </Pressable>
     </View>
   );

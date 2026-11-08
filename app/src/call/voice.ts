@@ -20,6 +20,7 @@ import {
   voicePresence,
   type VoicePresence,
 } from '../store';
+import {playCue} from './cues';
 import {createVoiceEngine, MAX_PEERS, type VoiceView} from './engine';
 import {
   setVoiceActionHandler,
@@ -53,6 +54,7 @@ export const voice = createVoiceEngine({
   presenceCount: key => voicePresence(key).length,
   service: voiceService,
   onSession: (key, action) => callNotice(key, action),
+  cue: playCue,
   randomId: () => b64(randomBytes(9)),
   now: () => Date.now(),
 });

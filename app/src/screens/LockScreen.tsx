@@ -2,12 +2,14 @@ import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {ActivityIndicator, AppState, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 
 import {Icon} from '../components/Icon';
-import {loadIdentity, NEEDS_PASSPHRASE} from '../keystore';
+import {entropyFromPhrase, identityFromEntropy} from '../crypto';
+import {loadIdentity, NEEDS_PASSPHRASE, storedAccountId, storeIdentity} from '../keystore';
+import {session} from '../session';
 import {splashHold} from '../logo/splashHold';
 import {LogoArt} from '../logo/LogoArt';
 import {useTheme} from '../theme';
 import {PrivacyLink, PrivacyPolicy} from '../privacy/PrivacyPolicy';
-import {makeStyles, PassphraseForm} from './OnboardingScreen';
+import {ImportPhrase, makeStyles, PassphraseForm} from './OnboardingScreen';
 
 /** Longest a fingerprint/PIN unlock may take before the screen gives up on it. */
 const UNLOCK_TIMEOUT_MS = 45_000;
@@ -48,6 +50,9 @@ export function LockScreen({
   // button again (which looked like the unlock had missed or hung).
   const [opening, setOpening] = useState(false);
   const [privacy, setPrivacy] = useState(false);
+  // After a failed fingerprint/PIN unlock: the recovery phrase instead.
+  const [usePhrase, setUsePhrase] = useState(false);
+  const [phraseError, setPhraseError] = useState<string | null>(null);
 
   // Each attempt's number: a late answer from an attempt that already timed
   // out may still unlock, but mustn't overwrite a newer attempt's state.
@@ -101,6 +106,29 @@ export function LockScreen({
     [onUnlock],
   );
 
+  // Some phones (seen on a Samsung foldable) pass the fingerprint but then
+  // refuse the Keystore key. The phrase is the account itself, so it unlocks
+  // without the Keystore, and the key is stored again under a new Keystore key.
+  const unlockWithPhrase = async (phrase: string) => {
+    setPhraseError(null);
+    try {
+      const me = identityFromEntropy(entropyFromPhrase(phrase));
+      const expected = session.get()?.id ?? (await storedAccountId());
+      if (expected && me.id !== expected) {
+        setPhraseError("That's the recovery phrase for a different account. To switch accounts, use \"Use a different account…\" below.");
+        return;
+      }
+      attempt.current++; // a fingerprint attempt still running mustn't touch the screen
+      setUsePhrase(false);
+      setError(null);
+      setOpening(true);
+      await storeIdentity(me.entropy).catch(() => {});
+      requestAnimationFrame(() => setTimeout(() => onUnlock(me.entropy), 0));
+    } catch (e) {
+      setPhraseError((e as Error).message);
+    }
+  };
+
   // Ask for the fingerprint by itself, but only once the app is really in
   // front: asked any earlier (say, launched by the installer after an
   // update), the system prompt can silently never appear.
@@ -145,7 +173,14 @@ export function LockScreen({
       <View style={styles.center}>
         <LogoArt height={190} />
       </View>
-      {NEEDS_PASSPHRASE ? (
+      {usePhrase ? (
+        <>
+          <ImportPhrase styles={styles} theme={theme} error={phraseError} submitLabel="Unlock" onOk={unlockWithPhrase} />
+          <Pressable style={styles.secondary} onPress={() => setUsePhrase(false)}>
+            <Text style={styles.secondaryText}>Back</Text>
+          </Pressable>
+        </>
+      ) : NEEDS_PASSPHRASE ? (
         <PassphraseForm
           title="Locked"
           hint="Enter the passphrase that protects your key in this browser."
@@ -171,7 +206,17 @@ export function LockScreen({
           )}
         </View>
       )}
-      {error && <Text style={styles.error}>{error}</Text>}
+      {error && !usePhrase && <Text style={styles.error}>{error}</Text>}
+      {error && !usePhrase && !opening && !NEEDS_PASSPHRASE && (
+        <Pressable
+          style={styles.secondary}
+          onPress={() => {
+            setPhraseError(null);
+            setUsePhrase(true);
+          }}>
+          <Text style={styles.secondaryText}>Use recovery phrase instead</Text>
+        </Pressable>
+      )}
       <Pressable style={styles.secondary} onPress={onForget}>
         <Text style={styles.secondaryText}>Use a different account…</Text>
       </Pressable>

@@ -36,3 +36,6 @@ export async function forgetIdentity(): Promise<void> {
 }
 
 export const NEEDS_PASSPHRASE = true;
+
+/** Native only: the browser's lock screen already takes a passphrase. */
+export const storedAccountId = async (): Promise<string | null> => null;

@@ -6,10 +6,11 @@ import {Platform} from 'react-native';
 import * as Keychain from 'react-native-keychain';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import {b64, unb64} from './crypto';
+import {b64, identityFromEntropy, unb64} from './crypto';
 
 const SERVICE = 'superchat.identity.v1';
 const MODE_KEY = 'superchat.keystore.mode';
+const ACCOUNT_KEY = 'superchat.keystore.account';
 
 /** 'biometric': needs biometrics or the screen-lock PIN to open. 'none': the
  * device has no screen lock, so the Keystore can't require one. */
@@ -29,7 +30,12 @@ export async function hasStoredIdentity(): Promise<boolean> {
   return true;
 }
 
+/** The stored account's public id (not secret), so a recovery phrase typed on
+ * the lock screen can be checked against it. Null for keys stored before it was kept. */
+export const storedAccountId = (): Promise<string | null> => AsyncStorage.getItem(ACCOUNT_KEY).catch(() => null);
+
 export async function storeIdentity(entropy: Uint8Array, _passphrase?: string): Promise<LockMode> {
+  await AsyncStorage.setItem(ACCOUNT_KEY, identityFromEntropy(entropy).id);
   await Keychain.resetGenericPassword({service: SERVICE}).catch(() => {});
   try {
     const ok = await Keychain.setGenericPassword('superchat', b64(entropy), {
@@ -71,7 +77,7 @@ export async function loadIdentity(_passphrase?: string): Promise<Uint8Array | n
 
 export async function forgetIdentity(): Promise<void> {
   await Keychain.resetGenericPassword({service: SERVICE});
-  await AsyncStorage.removeItem(MODE_KEY);
+  await AsyncStorage.multiRemove([MODE_KEY, ACCOUNT_KEY]);
 }
 
 /** Native unlocks by biometrics, not a passphrase. */
