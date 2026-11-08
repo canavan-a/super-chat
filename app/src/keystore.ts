@@ -10,7 +10,8 @@ import {b64, unb64} from './crypto';
 
 // Android v1 keys were made fingerprint-only. v2 keys also open with the
 // screen-lock PIN (see patches/react-native-keychain). A Keystore key's rules
-// can't change, so a v1 key is copied to v2 on its next unlock.
+// can't change, so a v1 key is copied to v2 on unlock, and v1 is only deleted
+// once v2 has unlocked by itself.
 const LEGACY_SERVICE = 'superchat.identity.v1';
 const SERVICE = Platform.OS === 'android' ? 'superchat.identity.v2' : LEGACY_SERVICE;
 const MODE_KEY = 'superchat.keystore.mode';
@@ -45,16 +46,19 @@ export async function storeIdentity(entropy: Uint8Array, _passphrase?: string): 
   return mode;
 }
 
+const storeLocked = (service: string, entropy: Uint8Array) =>
+  Keychain.setGenericPassword('superchat', b64(entropy), {
+    service,
+    accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_ANY_OR_DEVICE_PASSCODE,
+    accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    storage: Keychain.STORAGE_TYPE.RSA,
+    securityLevel: Keychain.SECURITY_LEVEL.ANY,
+  });
+
 async function storeUnder(service: string, entropy: Uint8Array): Promise<LockMode> {
   await Keychain.resetGenericPassword({service}).catch(() => {});
   try {
-    const ok = await Keychain.setGenericPassword('superchat', b64(entropy), {
-      service,
-      accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_ANY_OR_DEVICE_PASSCODE,
-      accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-      storage: Keychain.STORAGE_TYPE.RSA,
-      securityLevel: Keychain.SECURITY_LEVEL.ANY,
-    });
+    const ok = await storeLocked(service, entropy);
     if (ok) {
       await AsyncStorage.setItem(MODE_KEY, 'biometric');
       return 'biometric';
@@ -75,19 +79,49 @@ export async function lockMode(): Promise<LockMode> {
   return ((await AsyncStorage.getItem(MODE_KEY)) as LockMode) ?? 'biometric';
 }
 
-/** Prompts for biometrics/PIN (if the key needs it). Null if cancelled. */
-export async function loadIdentity(_passphrase?: string): Promise<Uint8Array | null> {
-  const legacy = SERVICE !== LEGACY_SERVICE && !(await storedServices()).includes(SERVICE);
-  const creds = await Keychain.getGenericPassword({
-    service: legacy ? LEGACY_SERVICE : SERVICE,
+const read = (service: string) =>
+  Keychain.getGenericPassword({
+    service,
     authenticationPrompt: {title: 'Unlock Super Chat', cancel: 'Cancel'},
   });
+
+/** Prompts for biometrics/PIN (if the key needs it). Null if cancelled. */
+export async function loadIdentity(_passphrase?: string): Promise<Uint8Array | null> {
+  if (SERVICE === LEGACY_SERVICE) {
+    const creds = await read(SERVICE);
+    return creds ? unb64(creds.password) : null;
+  }
+  // Android. Don't pick the entry from getAllGenericPasswordServices: it
+  // lists Keystore key aliases, and a v2 key can exist without a stored entry
+  // (a copy that failed halfway). Reading an entry that isn't there answers
+  // false without a prompt, so try v2 and fall back to v1.
+  try {
+    const creds = await read(SERVICE);
+    if (creds) {
+      // v2 works: the fingerprint-only v1 copy can go.
+      if ((await storedServices()).includes(LEGACY_SERVICE)) {
+        Keychain.resetGenericPassword({service: LEGACY_SERVICE}).catch(() => {});
+      }
+      return unb64(creds.password);
+    }
+  } catch (e) {
+    // The person cancelled: don't ask them again for the old key.
+    if (/cancel/i.test((e as Error).message ?? '')) throw e;
+    if (!(await storedServices()).includes(LEGACY_SERVICE)) throw e;
+  }
+  const creds = await read(LEGACY_SERVICE);
   if (!creds) return null;
   const entropy = unb64(creds.password);
-  // Move a fingerprint-only key to one the PIN opens too. In the background:
-  // making a StrongBox key can take seconds. If it fails, the old key stays
-  // and this is tried again next unlock.
-  if (legacy) storeIdentity(entropy).catch(() => {});
+  // Copy to a v2 key the PIN opens too. Locked storage only, never the
+  // unprotected fallback, and v1 stays until v2 has unlocked. In the
+  // background: making a StrongBox key can take seconds. If it fails, this
+  // is tried again next unlock.
+  if ((await lockMode()) === 'biometric') {
+    Keychain.resetGenericPassword({service: SERVICE})
+      .catch(() => {})
+      .then(() => storeLocked(SERVICE, entropy))
+      .catch(() => {});
+  }
   return entropy;
 }
 
