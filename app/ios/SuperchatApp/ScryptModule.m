@@ -17,6 +17,7 @@ static int pbkdf2(const uint8_t *pass, size_t passLen, const uint8_t *salt, size
 }
 #else
 #import <CommonCrypto/CommonKeyDerivation.h>
+#import <CommonCrypto/CommonCryptoError.h>
 /** PBKDF2-HMAC-SHA256 with one iteration, as scrypt uses it. */
 static int pbkdf2(const uint8_t *pass, size_t passLen, const uint8_t *salt, size_t saltLen, uint8_t *out, size_t len)
 {
