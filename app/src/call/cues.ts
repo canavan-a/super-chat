@@ -1,37 +1,66 @@
-// The join and leave sounds in a voice call ("rising trio": three quick sine
-// notes climbing for a join, falling for a leave). Made here as a small WAV,
-// so there are no sound files to bundle or license, and played natively
-// (CallCueModule on Android and iOS) through the call's own audio, so it
-// follows the speaker/earpiece/headset the call is on and never interrupts it.
+// The short sounds in a voice call, all sine notes from the same synth:
+//   join      "rising trio": three quick notes climbing (D5 G5 D6)
+//   leave     the same trio falling
+//   lost      one note gliding down an octave: someone's connection dropped
+//   thinking  four quiet quick notes, repeated while someone is reconnecting
+//             or slow to connect (the engine repeats it, see call/engine.ts)
+// Made here as a small WAV, so there are no sound files to bundle or license,
+// and played natively (CallCueModule on Android and iOS) through the call's
+// own audio, so it follows the speaker/earpiece/headset the call is on and
+// never interrupts it.
 import {base64} from '@scure/base';
 import {NativeModules, Platform} from 'react-native';
 
-export type Cue = 'join' | 'leave';
+export type Cue = 'join' | 'leave' | 'lost' | 'thinking';
 
 const RATE = 22050;
-const NOTES = [74, 79, 86]; // D5, G5, D6
-const STEP = 0.06; // seconds between notes
-const NOTE = 0.18; // each note's length
-const GAIN = 0.3;
 const ATTACK = 0.005;
+
+interface Note {
+  /** MIDI note. */
+  m: number;
+  /** Start, seconds. */
+  t: number;
+  /** Length, seconds. */
+  d: number;
+  gain: number;
+  /** Semitones the pitch slides by over the note. */
+  glide?: number;
+}
+
+const TRIO = [74, 79, 86]; // D5, G5, D6
+const trio = (ms: number[]): Note[] =>
+  ms.map((m, i) => ({m, t: i * 0.06, d: 0.18, gain: 0.3}));
+
+const CUES: Record<Cue, Note[]> = {
+  join: trio(TRIO),
+  leave: trio([...TRIO].reverse()),
+  lost: [{m: 86, t: 0, d: 0.45, gain: 0.22, glide: -12}],
+  thinking: [74, 79, 74, 79].map((m, i) => ({m, t: i * 0.12, d: 0.14, gain: 0.14})),
+};
 
 const hz = (midi: number) => 440 * 2 ** ((midi - 69) / 12);
 
 /** The cue as 16-bit mono PCM samples. */
 export function cueSamples(cue: Cue): Int16Array {
-  const notes = cue === 'join' ? NOTES : [...NOTES].reverse();
-  const len = Math.ceil((STEP * (notes.length - 1) + NOTE + 0.02) * RATE);
+  const notes = CUES[cue];
+  const end = Math.max(...notes.map(n => n.t + n.d));
+  const len = Math.ceil((end + 0.02) * RATE);
   const mix = new Float32Array(len);
-  notes.forEach((n, i) => {
-    const start = Math.round(i * STEP * RATE);
-    const f = hz(n);
-    for (let j = 0; j < NOTE * RATE && start + j < len; j++) {
+  for (const n of notes) {
+    const start = Math.round(n.t * RATE);
+    let phase = 0;
+    for (let j = 0; j < n.d * RATE && start + j < len; j++) {
       const t = j / RATE;
+      phase += (2 * Math.PI * hz(n.m + (n.glide ?? 0) * (t / n.d))) / RATE;
       // Quick linear attack, then an exponential fade to silence.
-      const env = t < ATTACK ? (t / ATTACK) * GAIN : GAIN * (0.0001 / GAIN) ** ((t - ATTACK) / (NOTE - ATTACK));
-      mix[start + j] += Math.sin(2 * Math.PI * f * t) * env;
+      const env =
+        t < ATTACK
+          ? (t / ATTACK) * n.gain
+          : n.gain * (0.0001 / n.gain) ** ((t - ATTACK) / (n.d - ATTACK));
+      mix[start + j] += Math.sin(phase) * env;
     }
-  });
+  }
   const out = new Int16Array(len);
   for (let i = 0; i < len; i++) out[i] = Math.max(-1, Math.min(1, mix[i])) * 0x7fff;
   return out;

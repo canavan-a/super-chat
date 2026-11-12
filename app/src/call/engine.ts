@@ -23,6 +23,7 @@ import {
   nextQuality,
   type QualityState,
 } from './quality';
+import type {Cue} from './cues';
 import {tuneSdp} from './sdp';
 
 export const MAX_PEERS = 7; // so at most 8 people
@@ -33,6 +34,11 @@ export const JOIN_TIMEOUT_MS = 20_000;
 export const DISCONNECT_GRACE_MS = 5_000;
 export const RESTART_DELAYS_MS = [2_000, 4_000, 8_000];
 export const ANSWERER_GIVE_UP_MS = 30_000;
+/** Someone still connecting for the first time after this gets the "thinking" sound. */
+export const SLOW_CONNECT_MS = 3_000;
+/** How often the "thinking" sound repeats while someone is reconnecting or slow to connect. */
+export const PENDING_CUE_MS = 2_000;
+const PENDING_TICK_MS = 250;
 export const STATS_MS = 300;
 /** How long a pre-warmed connection is kept without a join. */
 export const WARM_MS = 5 * 60_000;
@@ -169,8 +175,8 @@ export interface VoiceDeps {
   service: {update(view: VoiceView, roomName: string): void; stop(): void};
   /** This device entered (after it told the room) or left a room's voice. */
   onSession?(roomKey: string, action: 'join' | 'leave'): void;
-  /** The short sound for someone else joining (first connected) or leaving the call (call/cues.ts). */
-  cue?(cue: 'join' | 'leave'): void;
+  /** The short sounds for someone else joining, leaving, dropping or slow to connect (call/cues.ts). */
+  cue?(cue: Cue): void;
   randomId(): string;
   now(): number;
 }
@@ -188,6 +194,10 @@ interface Peer {
   deaf: boolean;
   conn: string;
   everConnected: boolean;
+  /** When this connection stopped being (or started not yet being) connected; 0 while connected. */
+  downSince: number;
+  /** The "lost" sound already played for this outage. */
+  lostCued: boolean;
   restarts: number;
   restartTimer: ReturnType<typeof setTimeout> | null;
   graceTimer: ReturnType<typeof setTimeout> | null;
@@ -214,6 +224,8 @@ interface Session {
   intervals: ReturnType<typeof setInterval>[];
   stopAudio: (() => void) | null;
   gotReplies: boolean;
+  /** When the "thinking" sound may next play. */
+  nextThinking: number;
   /** Cleared on leave, so async steps of an abandoned join stop. */
   alive: boolean;
   /** We broadcast join (so leaving must broadcast leave). */
@@ -441,6 +453,8 @@ export function createVoiceEngine(deps: VoiceDeps) {
       deaf: !!s?.deaf,
       conn: 'new',
       everConnected: false,
+      downSince: deps.now(),
+      lostCued: false,
       restarts: 0,
       restartTimer: null,
       graceTimer: null,
@@ -521,12 +535,17 @@ export function createVoiceEngine(deps: VoiceDeps) {
       // Only the first time: an ICE restart reconnecting isn't a join.
       if (!p.everConnected) cue('join');
       p.everConnected = true;
+      p.downSince = 0;
+      p.lostCued = false;
       p.restarts = 0;
       p.failed = false;
       p.diagnosis = null;
       clearPeerTimers(p);
       if (phaseNow() === 'finding' || phaseNow() === 'connecting') goLive();
-    } else if (p.conn === 'disconnected') {
+    } else if (!p.downSince) {
+      p.downSince = deps.now();
+    }
+    if (p.conn === 'disconnected') {
       // Often recovers on its own; give it a moment before restarting ICE.
       if (!p.graceTimer) {
         p.graceTimer = setTimeout(() => {
@@ -605,9 +624,37 @@ export function createVoiceEngine(deps: VoiceDeps) {
     notify();
   }
 
-  /** Join/leave sounds, unless sound is off (deafened). */
-  function cue(c: 'join' | 'leave') {
+  /** Call sounds, unless sound is off (deafened). */
+  function cue(c: Cue) {
     if (session && !session.deafened) deps.cue?.(c);
+  }
+
+  /**
+   * The waiting sounds: "lost" once when someone who was connected is still
+   * down after the disconnect grace, then "thinking" every PENDING_CUE_MS
+   * while anyone is reconnecting (past the grace) or still connecting for the
+   * first time after SLOW_CONNECT_MS. One loop for everyone, so they never stack.
+   */
+  function pendingTick() {
+    const ses = session;
+    if (!ses || !inVoice()) return;
+    const now = deps.now();
+    let pending = false;
+    for (const p of ses.peers.values()) {
+      if (p.failed || !p.downSince) continue;
+      const wait = p.everConnected ? DISCONNECT_GRACE_MS : SLOW_CONNECT_MS;
+      if (now - p.downSince < wait) continue;
+      if (p.everConnected && !p.lostCued) {
+        p.lostCued = true;
+        cue('lost');
+        ses.nextThinking = Math.max(ses.nextThinking, now + PENDING_CUE_MS);
+      }
+      pending = true;
+    }
+    if (pending && now >= ses.nextThinking) {
+      cue('thinking');
+      ses.nextThinking = now + PENDING_CUE_MS;
+    }
   }
 
   /** Someone left the call while we stay in it: drop them, with the leave sound if they'd been heard. */
@@ -755,6 +802,7 @@ export function createVoiceEngine(deps: VoiceDeps) {
       intervals: [],
       stopAudio: null,
       gotReplies: false,
+      nextThinking: 0,
       alive: true,
       joined: false,
     };
@@ -836,6 +884,7 @@ export function createVoiceEngine(deps: VoiceDeps) {
     ses.intervals.push(
       setInterval(() => pollStats().catch(() => {}), STATS_MS),
     );
+    ses.intervals.push(setInterval(pendingTick, PENDING_TICK_MS));
     later(FIND_MS, () => {
       // Presence was stale (nobody answered): we're the only one here.
       if (

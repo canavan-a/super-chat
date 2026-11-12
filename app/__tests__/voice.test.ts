@@ -11,10 +11,13 @@ import {
   ANSWERER_GIVE_UP_MS,
   BEAT_MS,
   createVoiceEngine,
+  DISCONNECT_GRACE_MS,
   FIND_MS,
   JOIN_TIMEOUT_MS,
   MAX_PEERS,
+  PENDING_CUE_MS,
   RESTART_DELAYS_MS,
+  SLOW_CONNECT_MS,
   type VoiceDeps,
   WARM_MS,
 } from '../src/call/engine';
@@ -685,6 +688,45 @@ describe('call sounds', () => {
     await flush();
     expect(a.cues).toEqual(['join', 'leave']);
     expect(b.cues).toEqual(['join']); // leaving yourself plays nothing
+  });
+
+  it('plays lost then thinking while someone reconnects, and stops when they are back', async () => {
+    const net = network();
+    const a = net.add('A');
+    const b = net.add('B');
+    await join(a);
+    jest.advanceTimersByTime(FIND_MS);
+    await join(b);
+    await flush();
+    connectAll(a, b);
+    a.cues.length = 0;
+    used(a).forEach(pc => pc.setState('disconnected'));
+    jest.advanceTimersByTime(DISCONNECT_GRACE_MS - 500);
+    expect(a.cues).toEqual([]); // a short blip stays quiet
+    jest.advanceTimersByTime(500);
+    expect(a.cues).toEqual(['lost']);
+    jest.advanceTimersByTime(PENDING_CUE_MS);
+    expect(a.cues).toEqual(['lost', 'thinking']);
+    jest.advanceTimersByTime(PENDING_CUE_MS);
+    expect(a.cues).toEqual(['lost', 'thinking', 'thinking']);
+    used(a).forEach(pc => pc.setState('connected'));
+    jest.advanceTimersByTime(PENDING_CUE_MS * 3);
+    expect(a.cues).toEqual(['lost', 'thinking', 'thinking']); // no join for a reconnect
+  });
+
+  it('plays thinking while someone is slow to connect, and nothing with sound off', async () => {
+    const net = network();
+    const a = net.add('A');
+    const b = net.add('B');
+    await join(a);
+    jest.advanceTimersByTime(FIND_MS);
+    await join(b);
+    await flush();
+    jest.advanceTimersByTime(SLOW_CONNECT_MS + 250);
+    expect(a.cues).toEqual(['thinking']);
+    a.engine.setDeafened(true);
+    jest.advanceTimersByTime(PENDING_CUE_MS * 2);
+    expect(a.cues).toEqual(['thinking']);
   });
 
   it('makes a short WAV that climbs for join and falls for leave', () => {
