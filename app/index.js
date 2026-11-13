@@ -31,4 +31,9 @@ notifee.onBackgroundEvent(async ({type, detail}) => {
   }
 });
 
+// Android: held open for the length of a voice call (VoiceCallModule.kt), so
+// React Native keeps JS timers running in the background and with the screen
+// locked. Native code ends it when the call does; the promise never settles.
+AppRegistry.registerHeadlessTask('VoiceKeepAlive', () => () => new Promise(() => {}));
+
 AppRegistry.registerComponent(appName, () => App);

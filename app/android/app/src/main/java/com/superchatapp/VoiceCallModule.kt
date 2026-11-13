@@ -1,5 +1,6 @@
 package com.superchatapp
 
+import android.util.Log
 import android.view.WindowManager
 import androidx.core.content.ContextCompat
 import com.facebook.react.ReactPackage
@@ -10,6 +11,8 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.UiThreadUtil
+import com.facebook.react.jstasks.HeadlessJsTaskConfig
+import com.facebook.react.jstasks.HeadlessJsTaskContext
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.facebook.react.uimanager.ViewManager
 
@@ -39,6 +42,7 @@ class VoiceCallModule(private val reactContext: ReactApplicationContext) :
 
   override fun invalidate() {
     VoiceCallService.listener = null
+    keepTimers(false)
     super.invalidate()
   }
 
@@ -73,6 +77,7 @@ class VoiceCallModule(private val reactContext: ReactApplicationContext) :
         it.putExtra(VoiceCallService.EXTRA_STATUS, status)
       }
       keepScreenOn(true)
+      keepTimers(true)
       promise.resolve(true)
     } catch (e: Exception) {
       promise.reject("E_VOICE_CALL", e)
@@ -98,6 +103,7 @@ class VoiceCallModule(private val reactContext: ReactApplicationContext) :
   @ReactMethod
   fun stop() {
     keepScreenOn(false)
+    keepTimers(false)
     send(VoiceCallService.ACTION_STOP)
   }
 
@@ -105,6 +111,40 @@ class VoiceCallModule(private val reactContext: ReactApplicationContext) :
   @ReactMethod fun addListener(@Suppress("UNUSED_PARAMETER") event: String) {}
 
   @ReactMethod fun removeListeners(@Suppress("UNUSED_PARAMETER") count: Double) {}
+
+  // The keep-alive task's id while in a call (touched on the UI thread only).
+  private var keepAliveTask: Int? = null
+
+  /**
+   * React Native stops JS timers once the app is in the background (or the
+   * screen is locked) unless a headless JS task is running. The voice engine
+   * runs on timers (heartbeats, ICE restarts, reconnects): without them the
+   * others stop hearing from this device and drop it after PRESENCE_MS. So a
+   * call holds a do-nothing task ("VoiceKeepAlive", registered in index.js)
+   * open from start to stop.
+   */
+  private fun keepTimers(on: Boolean) {
+    UiThreadUtil.runOnUiThread {
+      val tasks = HeadlessJsTaskContext.getInstance(reactContext)
+      if (on) {
+        if (keepAliveTask != null) return@runOnUiThread
+        try {
+          keepAliveTask =
+              tasks.startTask(
+                  HeadlessJsTaskConfig(
+                      KEEP_ALIVE_TASK,
+                      Arguments.createMap(),
+                      0, // no timeout: it lasts as long as the call
+                      true)) // allowed while the app is open (it is, at join)
+        } catch (e: Exception) {
+          Log.w("SuperChatVoice", "keep-alive task failed; timers pause in the background", e)
+        }
+      } else {
+        keepAliveTask?.let { tasks.finishTask(it) }
+        keepAliveTask = null
+      }
+    }
+  }
 
   private fun keepScreenOn(on: Boolean) {
     UiThreadUtil.runOnUiThread {
@@ -114,6 +154,8 @@ class VoiceCallModule(private val reactContext: ReactApplicationContext) :
     }
   }
 }
+
+private const val KEEP_ALIVE_TASK = "VoiceKeepAlive"
 
 class VoiceCallPackage : ReactPackage {
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> =
