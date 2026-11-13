@@ -534,6 +534,8 @@ export function createVoiceEngine(deps: VoiceDeps) {
     if (p.conn === 'connected') {
       // Only the first time: an ICE restart reconnecting isn't a join.
       if (!p.everConnected) cue('join');
+      // Back after the "lost" sound played; a short blip stays quiet both ways.
+      else if (p.lostCued) cue('back');
       p.everConnected = true;
       p.downSince = 0;
       p.lostCued = false;

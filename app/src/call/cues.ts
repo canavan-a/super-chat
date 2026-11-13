@@ -2,6 +2,7 @@
 //   join      "rising trio": three quick notes climbing (D5 G5 D6)
 //   leave     the same trio falling
 //   lost      one note gliding down an octave: someone's connection dropped
+//   back      two bright notes climbing (G5 D6): they reconnected after "lost"
 //   thinking  four quiet quick notes, repeated while someone is reconnecting
 //             or slow to connect (the engine repeats it, see call/engine.ts)
 // Made here as a small WAV, so there are no sound files to bundle or license,
@@ -11,7 +12,7 @@
 import {base64} from '@scure/base';
 import {NativeModules, Platform} from 'react-native';
 
-export type Cue = 'join' | 'leave' | 'lost' | 'thinking';
+export type Cue = 'join' | 'leave' | 'lost' | 'back' | 'thinking';
 
 const RATE = 22050;
 const ATTACK = 0.005;
@@ -36,6 +37,10 @@ const CUES: Record<Cue, Note[]> = {
   join: trio(TRIO),
   leave: trio([...TRIO].reverse()),
   lost: [{m: 86, t: 0, d: 0.45, gain: 0.22, glide: -12}],
+  back: [
+    {m: 79, t: 0, d: 0.12, gain: 0.25},
+    {m: 86, t: 0.07, d: 0.3, gain: 0.25},
+  ],
   thinking: [74, 79, 74, 79].map((m, i) => ({m, t: i * 0.12, d: 0.14, gain: 0.14})),
 };
 

@@ -703,6 +703,10 @@ describe('call sounds', () => {
     used(a).forEach(pc => pc.setState('disconnected'));
     jest.advanceTimersByTime(DISCONNECT_GRACE_MS - 500);
     expect(a.cues).toEqual([]); // a short blip stays quiet
+    used(a).forEach(pc => pc.setState('connected'));
+    expect(a.cues).toEqual([]); // and so does its recovery
+    used(a).forEach(pc => pc.setState('disconnected'));
+    jest.advanceTimersByTime(DISCONNECT_GRACE_MS - 500);
     jest.advanceTimersByTime(500);
     expect(a.cues).toEqual(['lost']);
     jest.advanceTimersByTime(PENDING_CUE_MS);
@@ -711,7 +715,7 @@ describe('call sounds', () => {
     expect(a.cues).toEqual(['lost', 'thinking', 'thinking']);
     used(a).forEach(pc => pc.setState('connected'));
     jest.advanceTimersByTime(PENDING_CUE_MS * 3);
-    expect(a.cues).toEqual(['lost', 'thinking', 'thinking']); // no join for a reconnect
+    expect(a.cues).toEqual(['lost', 'thinking', 'thinking', 'back']); // a ping, not a join
   });
 
   it('plays thinking while someone is slow to connect, and nothing with sound off', async () => {
