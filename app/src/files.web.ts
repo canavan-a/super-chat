@@ -12,12 +12,14 @@ export interface PickedFile {
   h?: number;
 }
 
-function pick(accept: string, multiple: boolean): Promise<File[]> {
+function pick(accept: string, multiple: boolean, capture?: 'environment'): Promise<File[]> {
   return new Promise(resolve => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = accept;
     input.multiple = multiple;
+    // Phones open the camera; desktops ignore it and show the file picker.
+    if (capture) input.setAttribute('capture', capture);
     input.onchange = () => resolve(Array.from(input.files ?? []));
     input.click();
   });
@@ -69,6 +71,10 @@ async function saveFile(name: string, data: Uint8Array): Promise<SavedFile> {
 
 export async function pickImages(): Promise<PickedFile[]> {
   return Promise.all((await pick('image/*', true)).slice(0, 6).map(read));
+}
+
+export async function takePhoto(): Promise<PickedFile[]> {
+  return Promise.all((await pick('image/*', false, 'environment')).slice(0, 1).map(read));
 }
 
 export async function pickFiles(): Promise<PickedFile[]> {

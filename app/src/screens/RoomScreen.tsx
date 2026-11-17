@@ -16,7 +16,7 @@ import {
 
 import type {HeaderInfo} from '../App';
 import {ActivityView, FileRef, fingerprint} from '../crypto';
-import {pickFiles, pickImages, PickedFile, saveFileAs} from '../files';
+import {dataUri, pickFiles, pickImages, PickedFile, saveFileAs, takePhoto} from '../files';
 import {openVoice} from '../call/actions';
 import {Avatar} from '../components/Avatar';
 import {PixelField} from '../components/PixelField';
@@ -86,6 +86,8 @@ export function RoomScreen({
   const meId = room?.me.id ?? '';
   const [draft, setDraft] = useState('');
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
+  // Picked or taken, but not sent until Send: a chance to check, or drop one.
+  const [staged, setStaged] = useState<StagedFile[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
   const lastTyping = useRef(0);
@@ -145,6 +147,19 @@ export function RoomScreen({
 
   const doSend = async () => {
     const body = draft.trim();
+    if (staged.length) {
+      // The caption and reply go with the files. The message shows in the
+      // chat straight away and uploads from there (store.sendFiles), whatever
+      // screen is showing; if it fails, its bubble says so and offers to retry.
+      const files = staged.map(s => s.file);
+      const reply = replyTo?.id;
+      setStaged([]);
+      setDraft('');
+      setReplyTo(null);
+      setError(null);
+      sendFiles(roomKey, files, body, reply).catch(() => {});
+      return;
+    }
     if (!body) return;
     setDraft('');
     const reply = replyTo?.id;
@@ -158,11 +173,11 @@ export function RoomScreen({
     }
   };
 
-  const doAttach = async (kind: 'image' | 'file') => {
+  const doAttach = async (kind: 'camera' | 'image' | 'file') => {
     setAttachOpen(false);
     let files: PickedFile[] = [];
     try {
-      files = kind === 'image' ? await pickImages() : await pickFiles();
+      files = kind === 'camera' ? await takePhoto() : kind === 'image' ? await pickImages() : await pickFiles();
     } catch (e) {
       setError((e as Error).message);
       return;
@@ -173,15 +188,15 @@ export function RoomScreen({
       setError(`${tooBig.name} is over 24 MB.`);
       return;
     }
-    // The caption and reply go with the files. The message shows in the chat
-    // straight away and uploads from there (store.sendFiles), whatever screen
-    // is showing; if it fails, its bubble says so and offers to retry.
-    const caption = draft.trim();
-    const reply = replyTo;
-    setDraft('');
-    setReplyTo(null);
-    setError(null);
-    sendFiles(roomKey, files, caption, reply?.id).catch(() => {});
+    const space = MAX_STAGED - staged.length;
+    if (files.length > space) setError(`Up to ${MAX_STAGED} attachments at a time.`);
+    else setError(null);
+    const added = files.slice(0, Math.max(0, space)).map(f => ({
+      id: `${Date.now()}-${Math.random()}`,
+      file: f,
+      uri: f.mime.startsWith('image/') ? dataUri(f.mime, f.data) : undefined,
+    }));
+    setStaged(s => [...s, ...added]);
   };
 
   const onChangeDraft = (t: string) => {
@@ -260,14 +275,50 @@ export function RoomScreen({
         <View style={styles.replyBar}>
           <View style={styles.replyBarText}>
             <Text style={styles.replyBarName}>Replying to {replyTo.sender === meId ? 'yourself' : nameOf(replyTo.sender)}</Text>
-            <Text style={styles.replyBarBody} numberOfLines={1}>
-              {censor(previewText(replyTo))}
-            </Text>
+            {firstImage(replyTo) ? (
+              <ImageStrip roomKey={roomKey} file={firstImage(replyTo)!} styles={styles}>
+                {replyTo.content?.t === 'file' && replyTo.content.body ? (
+                  <Text style={styles.stripText} numberOfLines={1}>
+                    {censor(replyTo.content.body)}
+                  </Text>
+                ) : null}
+              </ImageStrip>
+            ) : (
+              <Text style={styles.replyBarBody} numberOfLines={1}>
+                {censor(previewText(replyTo))}
+              </Text>
+            )}
           </View>
           <Pressable onPress={() => setReplyTo(null)} hitSlop={8}>
             <Icon name="close" size={16} color={theme.textMuted} />
           </Pressable>
         </View>
+      )}
+
+      {staged.length > 0 && (
+        <ScrollView horizontal style={styles.stagedBar} contentContainerStyle={styles.stagedRow} keyboardShouldPersistTaps="handled">
+          {staged.map(s => (
+            <View key={s.id} style={styles.stagedItem}>
+              {s.uri ? (
+                <Image source={{uri: s.uri}} style={styles.stagedThumb} resizeMode="cover" />
+              ) : (
+                <View style={[styles.stagedThumb, styles.stagedFile]}>
+                  <Icon name="attach" size={16} color={theme.textMuted} />
+                  <Text style={styles.stagedFileName} numberOfLines={2}>
+                    {s.file.name}
+                  </Text>
+                </View>
+              )}
+              <Pressable
+                style={styles.stagedRemove}
+                onPress={() => setStaged(list => list.filter(x => x.id !== s.id))}
+                hitSlop={8}
+                accessibilityLabel={`Remove ${s.file.name}`}>
+                <Icon name="close" size={12} color="#fff" />
+              </Pressable>
+            </View>
+          ))}
+        </ScrollView>
       )}
 
       <View style={styles.composer}>
@@ -278,7 +329,7 @@ export function RoomScreen({
           style={styles.composerInput}
           value={draft}
           onChangeText={onChangeDraft}
-          placeholder="Message"
+          placeholder={staged.length ? 'Add a caption' : 'Message'}
           placeholderTextColor={theme.textMuted}
           multiline
           // Same reason as super-badger: keep the keyboard up while sending
@@ -300,8 +351,12 @@ export function RoomScreen({
 
       <Overlay visible={attachOpen} onClose={() => setAttachOpen(false)} style={styles.sheetBackdrop}>
           <View style={styles.sheet}>
+            <Pressable style={styles.menuRow} onPress={() => doAttach('camera')}>
+              <Text style={styles.menuRowText}>Take photo</Text>
+            </Pressable>
+            <View style={styles.menuDivider} />
             <Pressable style={styles.menuRow} onPress={() => doAttach('image')}>
-              <Text style={styles.menuRowText}>Photo</Text>
+              <Text style={styles.menuRowText}>Gallery</Text>
             </Pressable>
             <View style={styles.menuDivider} />
             <Pressable style={styles.menuRow} onPress={() => doAttach('file')}>
@@ -500,6 +555,15 @@ function ChatList({
     if (index >= 0) listRef.current?.scrollToIndex({index, viewPosition: 0.85, animated: true});
     else listRef.current?.scrollToEnd({animated: true});
   }, [newestFirst, room.loading]);
+  // Tapping a quote: scroll to the quoted message, if it's loaded.
+  const newestFirstRef = useRef(newestFirst);
+  newestFirstRef.current = newestFirst;
+  const jumpToMessage = useCallback((id: string) => {
+    const index = newestFirstRef.current.findIndex(i => i.id === id);
+    if (index < 0) return;
+    jumpRetried.current = false;
+    listRef.current?.scrollToIndex({index, viewPosition: 0.5, animated: true});
+  }, []);
   const onScrollToIndexFailed = (info: {index: number; averageItemLength: number}) => {
     // Rows not measured yet: get close, then try again once they're drawn.
     listRef.current?.scrollToOffset({offset: info.averageItemLength * info.index, animated: false});
@@ -592,6 +656,7 @@ function ChatList({
         onOpenImage={setViewer}
         onShowReactions={setWhoFor}
         onAvatarPress={Platform.OS === 'ios' ? () => setMemberFor(item.sender) : undefined}
+        onJumpTo={jumpToMessage}
       />
     );
   };
@@ -927,6 +992,7 @@ const MessageRow = React.memo(function MessageRow({
   onOpenImage,
   onShowReactions,
   onAvatarPress,
+  onJumpTo,
 }: {
   msg: ChatMessage;
   mine: boolean;
@@ -951,6 +1017,8 @@ const MessageRow = React.memo(function MessageRow({
   onShowReactions: (m: ChatMessage) => void;
   /** Tap on their picture: report or block them (iOS, for App Review). */
   onAvatarPress?: () => void;
+  /** Tap on the quoted message: scroll to it. */
+  onJumpTo: (id: string) => void;
 }): React.JSX.Element {
   const c = msg.content;
   const filter = useFilterWords();
@@ -1023,8 +1091,24 @@ const MessageRow = React.memo(function MessageRow({
             onPress={() => tap()}
             onLongPress={onLongPress}
             delayLongPress={300}>
-            {reply && (
-              <View style={[styles.quote, {borderLeftColor: mine ? theme.bubbleUserText : theme.primary}]}>
+            {reply && firstImage(reply) && (
+              <Pressable onPress={() => tap(() => onJumpTo(reply.id))} onLongPress={onLongPress} delayLongPress={300}>
+                <ImageStrip roomKey={roomKey} file={firstImage(reply)!} styles={styles} wide>
+                  <Text style={styles.stripName}>{nameOf(reply.sender)}</Text>
+                  {reply.content?.t === 'file' && reply.content.body ? (
+                    <Text style={styles.stripText} numberOfLines={1}>
+                      {censor(reply.content.body, filter)}
+                    </Text>
+                  ) : null}
+                </ImageStrip>
+              </Pressable>
+            )}
+            {reply && !firstImage(reply) && (
+              <Pressable
+                style={[styles.quote, {borderLeftColor: mine ? theme.bubbleUserText : theme.primary}]}
+                onPress={() => tap(() => onJumpTo(reply.id))}
+                onLongPress={onLongPress}
+                delayLongPress={300}>
                 <Text style={[styles.quoteName, {color: textColor}]}>{nameOf(reply.sender)}</Text>
                 <Text style={[styles.quoteText, {color: textColor}]} numberOfLines={2}>
                   {reply.content?.t === 'text'
@@ -1035,7 +1119,7 @@ const MessageRow = React.memo(function MessageRow({
                         ? '🔊 Voice server'
                         : 'Message'}
                 </Text>
-              </View>
+              </Pressable>
             )}
             {!c && <Text style={[styles.brokenText, {color: textColor}]}>🔒 {msg.error ?? 'Encrypted message'}</Text>}
             {c?.t === 'file' &&
@@ -1113,6 +1197,63 @@ const MessageRow = React.memo(function MessageRow({
     </View>
   );
 });
+
+/** A file picked or taken, held above the composer until Send. */
+interface StagedFile {
+  id: string;
+  file: PickedFile;
+  /** For a thumbnail, when it's an image. */
+  uri?: string;
+}
+const MAX_STAGED = 6;
+
+/** The first image a message carries, to show in a reply to it. */
+function firstImage(m: ChatMessage): FileRef | undefined {
+  return m.content?.t === 'file' ? m.content.files.find(f => f.mime.startsWith('image/')) : undefined;
+}
+
+/**
+ * A reply's look at the image it quotes: a strip from the middle of it,
+ * shaded so the name and caption on top stay readable. A plain shaded box
+ * while it loads, or if it can't.
+ */
+function ImageStrip({
+  roomKey,
+  file,
+  styles,
+  wide,
+  children,
+}: {
+  roomKey: string;
+  file: FileRef;
+  styles: Styles;
+  /** In a bubble: a fixed width, so the strip isn't squeezed by a short reply. */
+  wide?: boolean;
+  children?: React.ReactNode;
+}) {
+  const [img, setImg] = useState<ShownImage | null>(() => peekImage(file));
+  useEffect(() => {
+    if (img) return;
+    let live = true;
+    loadImage(roomKey, file)
+      .then(shown => live && setImg(shown))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomKey, file.blob]);
+  return (
+    <View style={[styles.strip, wide && styles.stripWide]}>
+      {img && <Image source={{uri: img.uri}} style={StyleSheet.absoluteFill} resizeMode="cover" />}
+      <View style={styles.stripShade} />
+      <View style={styles.stripBody}>
+        {children}
+        {!children && <Text style={styles.stripText}>📷 Photo</Text>}
+      </View>
+    </View>
+  );
+}
 
 const uploadPercent = (progress: number[]) =>
   Math.round((100 * progress.reduce((a, b) => a + b, 0)) / Math.max(1, progress.length));
@@ -1318,6 +1459,29 @@ function makeStyles(theme: Theme) {
     quote: {borderLeftWidth: 3, paddingLeft: 8, opacity: 0.85},
     quoteName: {fontSize: 11, fontWeight: '700'},
     quoteText: {fontSize: 12},
+    strip: {height: 44, borderRadius: 6, overflow: 'hidden', backgroundColor: theme.surfaceAlt, justifyContent: 'center'},
+    stripWide: {width: 220, maxWidth: '100%'},
+    stripShade: {...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.5)'},
+    stripBody: {paddingHorizontal: 8},
+    stripName: {fontSize: 11, fontWeight: '700', color: '#fff'},
+    stripText: {fontSize: 12, color: '#fff'},
+    stagedBar: {flexGrow: 0, borderTopWidth: 1, borderTopColor: theme.border, backgroundColor: theme.surface},
+    stagedRow: {paddingHorizontal: 12, paddingVertical: 8, gap: 8},
+    stagedItem: {width: 64, height: 64},
+    stagedThumb: {width: 64, height: 64, borderRadius: 6, backgroundColor: theme.surfaceAlt},
+    stagedFile: {alignItems: 'center', justifyContent: 'center', padding: 4, gap: 2},
+    stagedFileName: {fontSize: 9, color: theme.textMuted, textAlign: 'center'},
+    stagedRemove: {
+      position: 'absolute',
+      top: 3,
+      right: 3,
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      backgroundColor: 'rgba(0,0,0,0.6)',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     image: {width: 240, maxWidth: '100%', borderRadius: 6, backgroundColor: theme.surfaceAlt},
     imageLoading: {alignItems: 'center', justifyContent: 'center'},
     imageUploading: {

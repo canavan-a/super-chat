@@ -44,7 +44,7 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Super Chat never turns on your camera: calls are voice only. The calling library includes camera support, which is why iOS asks for this text.</string>
+	<string>Take a photo to send in a chat.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Used to connect voice calls directly when you are on the same network as the other people in the call.</string>
 	<key>NSFaceIDUsageDescription</key>

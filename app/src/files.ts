@@ -3,7 +3,7 @@
 // copy is deleted straight away: nothing decrypted or about to be encrypted
 // is left lying on disk.
 import {errorCodes, isErrorWithCode, keepLocalCopy, pick, saveDocuments, types} from '@react-native-documents/picker';
-import {launchImageLibrary} from 'react-native-image-picker';
+import {ImagePickerResponse, launchCamera, launchImageLibrary} from 'react-native-image-picker';
 import RNFS from 'react-native-fs';
 import {NativeModules} from 'react-native';
 import {base64} from '@scure/base';
@@ -178,23 +178,29 @@ export async function cropAvatar(src: AvatarSource, x: number, y: number, size: 
   return base64.decode(await native.crop(src.base64, x, y, size, AVATAR_SIZE));
 }
 
+// Downscaled and re-encoded, which also strips EXIF (location etc.).
+const PHOTO_OPTIONS = {mediaType: 'photo', maxWidth: 2048, maxHeight: 2048, quality: 0.8, includeBase64: true} as const;
+
 export async function pickImages(): Promise<PickedFile[]> {
-  const res = await launchImageLibrary({
-    mediaType: 'photo',
-    selectionLimit: 6,
-    // Downscaled and re-encoded, which also strips EXIF (location etc.).
-    maxWidth: 2048,
-    maxHeight: 2048,
-    quality: 0.8,
-    includeBase64: true,
-  });
+  return readPhotos(await launchImageLibrary({...PHOTO_OPTIONS, selectionLimit: 6}));
+}
+
+/** Opens the camera for one photo, which isn't saved to the gallery. Empty if cancelled. */
+export async function takePhoto(): Promise<PickedFile[]> {
+  const res = await launchCamera({...PHOTO_OPTIONS, saveToPhotos: false, cameraType: 'back'});
+  if (res.errorCode === 'camera_unavailable') throw new Error('No camera available.');
+  if (res.errorCode === 'permission') throw new Error('Super Chat needs camera access: allow it in Settings.');
+  return readPhotos(res, 'photo.jpg');
+}
+
+async function readPhotos(res: ImagePickerResponse, fallbackName = 'image.jpg'): Promise<PickedFile[]> {
   if (res.didCancel || !res.assets) return [];
   if (res.errorMessage) throw new Error(res.errorMessage);
   const out: PickedFile[] = [];
   for (const a of res.assets) {
     if (!a.base64) continue;
     out.push({
-      name: a.fileName ?? 'image.jpg',
+      name: a.fileName ?? fallbackName,
       mime: a.type ?? 'image/jpeg',
       data: await b64DecodeAsync(a.base64),
       w: a.width,
