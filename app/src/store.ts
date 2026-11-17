@@ -8,6 +8,7 @@
 // to our encrypted vault on each server (see saveVaultSoon).
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useEffect, useReducer, useRef} from 'react';
+import {mentionsToNames} from './mentions';
 import {AppState, NativeModules, Platform} from 'react-native';
 import {base64} from '@scure/base';
 
@@ -117,6 +118,8 @@ export interface Room {
   messages: ChatMessage[];
   /** target message id → emoji → senders */
   reactions: Record<string, Record<string, string[]>>;
+  /** The newest edit of each message, by editKey(sender, target): see editOf. */
+  edits: Record<string, MessageEdit>;
   /** sender → id of the newest message they've read */
   receipts: Record<string, string>;
   typing: Record<string, number>;
@@ -367,8 +370,9 @@ function previewLine(r: Room): string | null {
   const who = m.sender === r.me.id ? 'You' : (namesOf(r)[m.sender] ?? 'Someone');
   const c = m.content;
   let what = '🔒 Encrypted message';
-  if (c?.t === 'text') what = c.body;
-  else if (c?.t === 'file') what = c.body || (c.files.every((f: FileRef) => f.mime.startsWith('image/')) ? '📷 Photo' : `📎 ${c.files[0]?.name ?? 'File'}`);
+  const body = mentionsToNames(bodyOf(r, m), id => namesOf(r)[id] ?? 'someone');
+  if (c?.t === 'text') what = body;
+  else if (c?.t === 'file') what = body || (c.files.every((f: FileRef) => f.mime.startsWith('image/')) ? '📷 Photo' : `📎 ${c.files[0]?.name ?? 'File'}`);
   else if (c?.t === 'ice') what = '🔊 Shared a voice server';
   return `${who}: ${what.replace(/\s+/g, ' ').slice(0, 120)}`;
 }
@@ -384,6 +388,7 @@ function blankRoom(server: string, id: string): Room {
     keys: {},
     messages: [],
     reactions: {},
+    edits: {},
     receipts: {},
     typing: {},
     voice: {},
@@ -549,6 +554,7 @@ function dropWiped(r: Room): boolean {
   r.wipeSeen = w.at;
   if (first) return false;
   forgetMessages(r, () => true);
+  r.edits = {};
   r.hasMore = true;
   r.hasNewer = false;
   r.newSinceRead = 0;
@@ -709,6 +715,18 @@ function ingest(r: Room, msg: ChatMessage, intoWindow = false) {
     r.receipts = {...r.receipts, [msg.sender]: c.upTo};
     return;
   }
+  if (c?.t === 'edit') {
+    // Keyed by sender as well as target: an edit only ever applies to its
+    // sender's own message (editOf checks), so one from anyone else is inert.
+    // Pages arrive in any order (paging up comes after the newest): the
+    // edit furthest along wins, whenever it turns up.
+    const k = editKey(msg.sender, c.target);
+    const had = r.edits[k];
+    const ids = had ? [...new Set([...had.ids, msg.id])] : [msg.id];
+    const newest = !had || msg.pos >= had.pos;
+    r.edits = {...r.edits, [k]: newest ? {body: c.body, pos: msg.pos, at: msg.createdAt, target: c.target, ids} : {...had, ids}};
+    return;
+  }
   // Call notices sit in the timeline but aren't news: no preview, no unread.
   if (msg.pos > 0 && !msg.pending && !isCallNotice(msg)) {
     r.lastPos = Math.max(r.lastPos, msg.pos);
@@ -720,6 +738,40 @@ function ingest(r: Room, msg: ChatMessage, intoWindow = false) {
   // a line past its end would leave a hole between them.
   if (r.hasNewer && !intoWindow && !msg.pending && msg.pos > newestHeldPos(r)) return;
   r.messages = [...r.messages.filter(x => x.id !== msg.id), msg].sort((a, b) => a.pos - b.pos);
+}
+
+export interface MessageEdit {
+  body: string;
+  /** The edit's own position: the newest one wins. */
+  pos: number;
+  at: number;
+  target: string;
+  /** Every edit message seen for it, so deleting the message deletes them too. */
+  ids: string[];
+}
+
+const editKey = (sender: string, target: string) => `${sender}|${target}`;
+
+/** The newest edit of a message, made by whoever sent it. */
+export const editOf = (r: Room | undefined, m: ChatMessage): MessageEdit | undefined => r?.edits[editKey(m.sender, m.id)];
+
+/** A message's text as it reads now: edited, or as sent. Mentions are still `<@id>` tokens. */
+export function bodyOf(r: Room | undefined, m: ChatMessage): string {
+  const c = m.content;
+  const edit = editOf(r, m);
+  if (edit && (c?.t === 'text' || c?.t === 'file')) return edit.body;
+  return c?.t === 'text' ? c.body : c?.t === 'file' ? c.body ?? '' : '';
+}
+
+/** Drops the edits of messages that are gone, and edits that are themselves gone. */
+function forgetEdits(r: Room, gone: (id: string) => boolean) {
+  const kept = Object.entries(r.edits).filter(([, e]) => !gone(e.target) && !e.ids.some(gone));
+  if (kept.length !== Object.keys(r.edits).length) r.edits = Object.fromEntries(kept);
+}
+
+/** Gives one of my messages (text, or a file's caption) a new body. */
+export function editMessage(key: string, target: ChatMessage, body: string): Promise<void> {
+  return send(key, {t: 'edit', target: target.id, body});
 }
 
 /** A "joined the call" / "left the call" line (src/call/voice.ts posts them). */
@@ -1437,7 +1489,10 @@ async function handlePush(server: string, msg: any) {
         };
         if (parsed.kind === 'epoch' || parsed.kind === 'join') await loadState(r);
         if (parsed.kind === 'epoch' && parsed.author !== r.me.id) republishProfile(r).catch(() => {});
-        if (parsed.kind === 'delete') forgetMessages(r, m => m.id === parsed.pub.msg);
+        if (parsed.kind === 'delete') {
+          forgetMessages(r, m => m.id === parsed.pub.msg);
+          forgetEdits(r, id => id === parsed.pub.msg);
+        }
         r.view = roomView(r.log, r.keys);
         if (parsed.kind === 'wipe' && dropWiped(r)) openRoom(r.key, false).catch(() => {});
       }
@@ -1463,6 +1518,7 @@ async function handlePush(server: string, msg: any) {
     case 'deleted': {
       const ids = new Set<string>(msg.ids);
       forgetMessages(r, m => ids.has(m.id));
+      forgetEdits(r, id => ids.has(id));
       emit();
       return;
     }
@@ -2040,9 +2096,19 @@ export async function wipeChat(key: string) {
 
 export async function deleteMessage(key: string, msg: ChatMessage) {
   const r = rooms.get(key)!;
-  await append(r, () => ({events: [{kind: 'delete', pub: {msg: msg.id, sender: msg.sender}}]}));
-  r.messages = r.messages.filter(m => m.id !== msg.id);
-  emit();
+  // Its edits go too: each is a message of its own on the server, holding a version of the text.
+  // The message itself goes first, so it's gone even if a later batch fails;
+  // the server takes up to 8 events a batch.
+  const ids = [msg.id, ...(editOf(r, msg)?.ids ?? [])];
+  for (let i = 0; i < ids.length; i += 8) {
+    const chunk = ids.slice(i, i + 8);
+    await append(r, () => ({events: chunk.map((id): NewEvent => ({kind: 'delete', pub: {msg: id, sender: msg.sender}}))}));
+    if (i === 0) {
+      r.messages = r.messages.filter(m => m.id !== msg.id);
+      forgetEdits(r, id => id === msg.id);
+      emit();
+    }
+  }
 }
 
 export const kick = (key: string, target: string) =>

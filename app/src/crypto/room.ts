@@ -69,6 +69,9 @@ export type MessageContent =
   | {t: 'file'; files: FileRef[]; body?: string; replyTo?: string}
   | {t: 'reaction'; target: string; emoji: string; remove?: boolean}
   | {t: 'receipt'; upTo: string}
+  // A new body for one of the sender's own messages (text, or a file's
+  // caption). Only the original sender's edits count; see store.ts ingest.
+  | {t: 'edit'; target: string; body: string}
   // A STUN/TURN server someone shared for voice (Settings → Voice → Share).
   // Its credentials are only readable by the room's members, like any message.
   | {t: 'ice'; server: {urls: string; username?: string; credential?: string}}
@@ -85,10 +88,10 @@ export interface FileRef {
   h?: number;
 }
 
-export type ServerKind = 'msg' | 'reaction' | 'receipt' | 'call';
+export type ServerKind = 'msg' | 'reaction' | 'receipt' | 'call' | 'edit';
 
 export function serverKind(c: MessageContent): ServerKind {
-  return c.t === 'reaction' ? 'reaction' : c.t === 'receipt' ? 'receipt' : c.t === 'call' ? 'call' : 'msg';
+  return c.t === 'reaction' ? 'reaction' : c.t === 'receipt' ? 'receipt' : c.t === 'call' ? 'call' : c.t === 'edit' ? 'edit' : 'msg';
 }
 
 const msgAd = (room: string, epoch: number, id: string, sender: string) => utf8(`sc-msg|${room}|${epoch}|${id}|${sender}`);

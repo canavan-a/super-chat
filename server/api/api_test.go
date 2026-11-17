@@ -459,14 +459,16 @@ func TestUnreadCount(t *testing.T) {
 		return out.ReadPos, out.Count
 	}
 
-	// Only messages from others count: not reactions, receipts, call notices
-	// or your own.
+	// Only messages from others count: not reactions, receipts, call notices,
+	// edits or your own.
 	r.send(alice, "msg")
 	r.send(alice, "msg")
 	r.send(alice, "reaction")
 	r.send(alice, "receipt")
 	r.send(bob, "reaction")
-	_, code, body := r.send(alice, "call")
+	_, code, body := r.send(alice, "edit")
+	want(t, "edit", code, 201, body)
+	_, code, body = r.send(alice, "call")
 	want(t, "call notice", code, 201, body)
 	if rp, n := unread(bob, 0); rp != 0 || n != 2 {
 		t.Fatalf("bob: readPos %d count %d, want 0 2", rp, n)

@@ -324,7 +324,7 @@ func (a *API) postMessage(c *gin.Context) {
 		abort(c, http.StatusBadRequest, "bad message")
 		return
 	}
-	if req.Kind != "msg" && req.Kind != "reaction" && req.Kind != "receipt" && req.Kind != "call" {
+	if req.Kind != "msg" && req.Kind != "reaction" && req.Kind != "receipt" && req.Kind != "call" && req.Kind != "edit" {
 		abort(c, http.StatusBadRequest, "bad kind")
 		return
 	}
@@ -366,7 +366,7 @@ func (a *API) postMessage(c *gin.Context) {
 	}
 	a.hub.SendRoom(st.Room, wsMsg{"type": "message", "room": st.Room, "message": msg}, "")
 	// Devices that aren't connected right now (Google Play build) are woken
-	// to fetch it. Reactions, receipts and call notices don't notify, so don't wake.
+	// to fetch it. Reactions, receipts, edits and call notices don't notify, so don't wake.
 	if req.Kind == "msg" {
 		a.push.Wake(st.Room)
 	}

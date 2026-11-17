@@ -34,9 +34,14 @@ import {platformConfirm} from '../platformConfirm';
 import {openMail, reportMailto} from '../privacy/contact';
 import {QUICK_REACTIONS, settingsStore} from '../settings';
 import {Route} from '../routes';
+import {encodeMentions, matchMembers, mentionQuery, mentionsToNames} from '../mentions';
 import {
+  bodyOf,
   chatPicture,
   chatTitle,
+  editMessage,
+  editOf,
+  MessageEdit,
   ChatMessage,
   deleteMessage,
   fetchFile,
@@ -86,6 +91,14 @@ export function RoomScreen({
   const meId = room?.me.id ?? '';
   const [draft, setDraft] = useState('');
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
+  // Editing one of my messages: the composer holds its text, and Send saves it.
+  const [editing, setEditing] = useState<ChatMessage | null>(null);
+  // What the composer held before editing started, put back after.
+  const draftBeforeEdit = useRef('');
+  // Where the cursor is, for the @mention list (see mentionQuery).
+  const [cursor, setCursor] = useState(0);
+  // Members picked from the @ list, by the name inserted: settles two with one name.
+  const picked = useRef<Record<string, string>>({});
   // Picked or taken, but not sent until Send: a chance to check, or drop one.
   const [staged, setStaged] = useState<StagedFile[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -112,6 +125,7 @@ export function RoomScreen({
   const isAdmin = !!view?.members.find(m => m.id === meId && m.role === 'admin');
   const names = namesOf(room);
   const nameOf = useCallback((id: string) => names[id] ?? fingerprint(id), [names]);
+  const mentionable = useMemo(() => (view?.members ?? []).map(m => ({id: m.id, name: names[m.id] ?? ''})), [view, names]);
 
   useEffect(() => {
     if (!view) return;
@@ -146,7 +160,24 @@ export function RoomScreen({
   }
 
   const doSend = async () => {
-    const body = draft.trim();
+    const typed = draft.trim();
+    // "@Alice" as typed goes out as Alice's member ID, so it follows renames.
+    const body = encodeMentions(typed, mentionable, picked.current);
+    if (editing) {
+      const m = editing;
+      // A text message can't be edited down to nothing (delete it instead); a caption can.
+      if (!body && m.content?.t === 'text') return;
+      stopEditing();
+      if (body === bodyOf(room, m)) return;
+      try {
+        await editMessage(roomKey, m, body);
+        setError(null);
+      } catch (e) {
+        setError((e as Error).message);
+      }
+      return;
+    }
+    picked.current = {};
     if (staged.length) {
       // The caption and reply go with the files. The message shows in the
       // chat straight away and uploads from there (store.sendFiles), whatever
@@ -168,9 +199,36 @@ export function RoomScreen({
       await send(roomKey, {t: 'text', body, replyTo: reply});
       setError(null);
     } catch (e) {
-      setDraft(body);
+      setDraft(typed);
       setError((e as Error).message);
     }
+  };
+
+  const startEditing = (m: ChatMessage) => {
+    if (!editing) draftBeforeEdit.current = draft;
+    setReplyTo(null);
+    setEditing(m);
+    const text = mentionsToNames(bodyOf(room, m), nameOf);
+    setDraft(text);
+    setCursor(text.length);
+  };
+  const stopEditing = () => {
+    setEditing(null);
+    setDraft(draftBeforeEdit.current);
+    setCursor(draftBeforeEdit.current.length);
+    draftBeforeEdit.current = '';
+  };
+
+  // Typing "@" lists the members (but me) whose names match what follows it.
+  const mq = mentionQuery(draft, cursor);
+  const mentionMatches = mq ? matchMembers(mentionable.filter(m => m.id !== meId), mq.query) : [];
+  const pickMention = (id: string, name: string) => {
+    if (!mq) return;
+    const insert = `@${name} `;
+    const next = draft.slice(0, mq.start) + insert + draft.slice(cursor);
+    picked.current[name] = id;
+    setDraft(next);
+    setCursor(mq.start + insert.length);
   };
 
   const doAttach = async (kind: 'camera' | 'image' | 'file') => {
@@ -200,7 +258,10 @@ export function RoomScreen({
   };
 
   const onChangeDraft = (t: string) => {
+    // The cursor's own event may come after this one: typing at the end keeps it at the end.
+    setCursor(c => (c >= draft.length ? t.length : c));
     setDraft(t);
+    if (editing) return; // not news: no typing indicator
     if (t && Date.now() - lastTyping.current > 3000) {
       lastTyping.current = Date.now();
       sendTyping(roomKey);
@@ -257,7 +318,11 @@ export function RoomScreen({
           nameOf={nameOf}
           styles={styles}
           theme={theme}
-          onReply={m => setReplyTo(m)}
+          onReply={m => {
+            if (editing) stopEditing();
+            setReplyTo(m);
+          }}
+          onEdit={startEditing}
           onLeft={() => onNavigate({name: 'home'})}
         />
       )}
@@ -277,9 +342,9 @@ export function RoomScreen({
             <Text style={styles.replyBarName}>Replying to {replyTo.sender === meId ? 'yourself' : nameOf(replyTo.sender)}</Text>
             {firstImage(replyTo) ? (
               <ImageStrip roomKey={roomKey} file={firstImage(replyTo)!} styles={styles}>
-                {replyTo.content?.t === 'file' && replyTo.content.body ? (
+                {bodyOf(room, replyTo) ? (
                   <Text style={styles.stripText} numberOfLines={1}>
-                    {censor(replyTo.content.body)}
+                    {censor(mentionsToNames(bodyOf(room, replyTo), nameOf))}
                   </Text>
                 ) : null}
               </ImageStrip>
@@ -295,7 +360,34 @@ export function RoomScreen({
         </View>
       )}
 
-      {staged.length > 0 && (
+      {editing && (
+        <View style={styles.replyBar}>
+          <View style={styles.replyBarText}>
+            <Text style={styles.replyBarName}>Editing message</Text>
+            <Text style={styles.replyBarBody} numberOfLines={1}>
+              {censor(previewText(editing))}
+            </Text>
+          </View>
+          <Pressable onPress={stopEditing} hitSlop={8} accessibilityLabel="Cancel editing">
+            <Icon name="close" size={16} color={theme.textMuted} />
+          </Pressable>
+        </View>
+      )}
+
+      {mentionMatches.length > 0 && (
+        <View style={styles.mentionList}>
+          {mentionMatches.map(m => (
+            <Pressable key={m.id} style={styles.mentionRow} onPress={() => pickMention(m.id, m.name)}>
+              <Avatar roomKey={roomKey} member={m.id} name={m.name} size={24} />
+              <Text style={styles.mentionName} numberOfLines={1}>
+                {m.name}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
+
+      {staged.length > 0 && !editing && (
         <ScrollView horizontal style={styles.stagedBar} contentContainerStyle={styles.stagedRow} keyboardShouldPersistTaps="handled">
           {staged.map(s => (
             <View key={s.id} style={styles.stagedItem}>
@@ -322,14 +414,17 @@ export function RoomScreen({
       )}
 
       <View style={styles.composer}>
-        <Pressable style={styles.attachButton} onPress={() => setAttachOpen(true)} accessibilityLabel="Attach">
-          <Icon name="attach" size={18} color={theme.text} />
-        </Pressable>
+        {!editing && (
+          <Pressable style={styles.attachButton} onPress={() => setAttachOpen(true)} accessibilityLabel="Attach">
+            <Icon name="attach" size={18} color={theme.text} />
+          </Pressable>
+        )}
         <TextInput
           style={styles.composerInput}
           value={draft}
           onChangeText={onChangeDraft}
-          placeholder={staged.length ? 'Add a caption' : 'Message'}
+          onSelectionChange={e => setCursor(e.nativeEvent.selection.end)}
+          placeholder={editing ? 'Edit message' : staged.length ? 'Add a caption' : 'Message'}
           placeholderTextColor={theme.textMuted}
           multiline
           // Same reason as super-badger: keep the keyboard up while sending
@@ -344,8 +439,8 @@ export function RoomScreen({
             }
           }}
         />
-        <Pressable style={styles.sendButton} onPress={doSend} accessibilityLabel="Send">
-          <Icon name="send" size={18} color={theme.primaryText} />
+        <Pressable style={styles.sendButton} onPress={doSend} accessibilityLabel={editing ? 'Save edit' : 'Send'}>
+          {editing ? <Text style={styles.saveText}>Save</Text> : <Icon name="send" size={18} color={theme.primaryText} />}
         </Pressable>
       </View>
 
@@ -371,8 +466,9 @@ export function RoomScreen({
   function previewText(m: ChatMessage): string {
     const c = m.content;
     if (!c) return 'Encrypted message';
-    if (c.t === 'text') return c.body;
-    if (c.t === 'file') return c.body || `📎 ${c.files.map(f => f.name).join(', ')}`;
+    const body = mentionsToNames(bodyOf(room, m), nameOf);
+    if (c.t === 'text') return body;
+    if (c.t === 'file') return body || `📎 ${c.files.map(f => f.name).join(', ')}`;
     if (c.t === 'ice') return '🔊 Voice server';
     return '';
   }
@@ -407,6 +503,7 @@ function ChatList({
   styles,
   theme,
   onReply,
+  onEdit,
   onLeft,
 }: {
   room: Room;
@@ -416,12 +513,27 @@ function ChatList({
   styles: Styles;
   theme: Theme;
   onReply: (m: ChatMessage) => void;
+  onEdit: (m: ChatMessage) => void;
   /** After blocking someone, which leaves the room. */
   onLeft: () => void;
 }): React.JSX.Element {
   const listRef = useRef<FlatList>(null);
   const [showJump, setShowJump] = useState(false);
   const [menuFor, setMenuFor] = useState<ChatMessage | null>(null);
+  // Edited messages switched back to their original text (long-press → Show original).
+  const [originals, setOriginals] = useState<ReadonlySet<string>>(new Set());
+  const toggleOriginal = (id: string) =>
+    setOriginals(s => {
+      const next = new Set(s);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  // What a message's text menu items (Copy) act on: as it shows right now.
+  const shownBody = (m: ChatMessage) => {
+    const c = m.content;
+    const original = c?.t === 'text' ? c.body : c?.t === 'file' ? c.body ?? '' : '';
+    return mentionsToNames(originals.has(m.id) ? original : bodyOf(room, m), nameOf);
+  };
   // Tap on someone's picture (iOS): the sheet to report or block them.
   const [memberFor, setMemberFor] = useState<string | null>(null);
   const report = (member: string) =>
@@ -631,6 +743,7 @@ function ChatList({
     const mine = item.sender === meId;
     const grouped = !!prev && sameGroup(prev, item);
     const lastInGroup = !next || !sameGroup(item, next);
+    const reply = item.content && 'replyTo' in item.content && item.content.replyTo ? byId.get(item.content.replyTo) : undefined;
     return (
       <MessageRow
         msg={item}
@@ -639,7 +752,10 @@ function ChatList({
         grouped={grouped}
         lastInGroup={lastInGroup}
         name={nameOf(item.sender)}
-        reply={item.content && 'replyTo' in item.content && item.content.replyTo ? byId.get(item.content.replyTo) : undefined}
+        reply={reply}
+        replyText={reply ? mentionsToNames(bodyOf(room, reply), nameOf) : undefined}
+        edit={editOf(room, item)}
+        showOriginal={originals.has(item.id)}
         nameOf={nameOf}
         reactions={room.reactions[item.id]}
         seenBy={mine ? seenBy[item.id]?.map(nameOf) : undefined}
@@ -767,20 +883,45 @@ function ChatList({
               }}>
               <Text style={styles.menuRowText}>Reply</Text>
             </Pressable>
-            {menuFor?.content && (menuFor.content.t === 'text' || (menuFor.content.t === 'file' && menuFor.content.body)) ? (
+            {menuFor?.content && (menuFor.content.t === 'text' || menuFor.content.t === 'file') && shownBody(menuFor) ? (
               <>
                 <View style={styles.menuDivider} />
                 <Pressable
                   style={styles.menuRow}
                   onPress={() => {
-                    const c = menuFor!.content!;
-                    Clipboard.setString(c.t === 'text' ? c.body : c.t === 'file' ? c.body ?? '' : '');
+                    Clipboard.setString(shownBody(menuFor!));
                     setMenuFor(null);
                   }}>
                   <Text style={styles.menuRowText}>Copy</Text>
                 </Pressable>
               </>
             ) : null}
+            {menuFor && menuFor.sender === meId && (menuFor.content?.t === 'text' || menuFor.content?.t === 'file') && (
+              <>
+                <View style={styles.menuDivider} />
+                <Pressable
+                  style={styles.menuRow}
+                  onPress={() => {
+                    onEdit(menuFor!);
+                    setMenuFor(null);
+                  }}>
+                  <Text style={styles.menuRowText}>{menuFor.content.t === 'file' ? 'Edit caption' : 'Edit'}</Text>
+                </Pressable>
+              </>
+            )}
+            {menuFor && editOf(room, menuFor) && (
+              <>
+                <View style={styles.menuDivider} />
+                <Pressable
+                  style={styles.menuRow}
+                  onPress={() => {
+                    toggleOriginal(menuFor!.id);
+                    setMenuFor(null);
+                  }}>
+                  <Text style={styles.menuRowText}>{originals.has(menuFor.id) ? 'Show edited' : 'Show original'}</Text>
+                </Pressable>
+              </>
+            )}
             {Platform.OS === 'ios' && menuFor && menuFor.sender !== meId && (
               <>
                 <View style={styles.menuDivider} />
@@ -980,6 +1121,9 @@ const MessageRow = React.memo(function MessageRow({
   lastInGroup,
   name,
   reply,
+  replyText,
+  edit,
+  showOriginal,
   nameOf,
   reactions,
   seenBy,
@@ -1003,6 +1147,12 @@ const MessageRow = React.memo(function MessageRow({
   lastInGroup: boolean;
   name: string;
   reply?: ChatMessage;
+  /** The quoted message's text as it reads now (edited, mentions as names). */
+  replyText?: string;
+  /** Its newest edit, if it's been edited. */
+  edit?: MessageEdit;
+  /** Switched back to the text as first sent. */
+  showOriginal: boolean;
   nameOf: (id: string) => string;
   reactions?: Record<string, string[]>;
   seenBy?: string[];
@@ -1024,6 +1174,9 @@ const MessageRow = React.memo(function MessageRow({
   const filter = useFilterWords();
   const textColor = mine ? theme.bubbleUserText : theme.bubbleAssistantText;
   const time = chatTime(msg.createdAt);
+  const sentBody = c?.t === 'text' ? c.body : c?.t === 'file' ? c.body ?? '' : '';
+  const body = edit && !showOriginal ? edit.body : sentBody;
+  const editLabel = edit ? (showOriginal ? 'original' : 'edited') : null;
 
   // Reactions: who reacted with what, and which are mine.
   const entries = reactions ? Object.entries(reactions).filter(([, who]) => who.length > 0) : [];
@@ -1095,9 +1248,9 @@ const MessageRow = React.memo(function MessageRow({
               <Pressable onPress={() => tap(() => onJumpTo(reply.id))} onLongPress={onLongPress} delayLongPress={300}>
                 <ImageStrip roomKey={roomKey} file={firstImage(reply)!} styles={styles} wide>
                   <Text style={styles.stripName}>{nameOf(reply.sender)}</Text>
-                  {reply.content?.t === 'file' && reply.content.body ? (
+                  {replyText ? (
                     <Text style={styles.stripText} numberOfLines={1}>
-                      {censor(reply.content.body, filter)}
+                      {censor(replyText, filter)}
                     </Text>
                   ) : null}
                 </ImageStrip>
@@ -1112,7 +1265,7 @@ const MessageRow = React.memo(function MessageRow({
                 <Text style={[styles.quoteName, {color: textColor}]}>{nameOf(reply.sender)}</Text>
                 <Text style={[styles.quoteText, {color: textColor}]} numberOfLines={2}>
                   {reply.content?.t === 'text'
-                    ? censor(reply.content.body, filter)
+                    ? censor(replyText ?? '', filter)
                     : reply.content?.t === 'file'
                       ? '📎 Attachment'
                       : reply.content?.t === 'ice'
@@ -1149,8 +1302,8 @@ const MessageRow = React.memo(function MessageRow({
                 ),
               )}
             {c?.t === 'ice' ? <IceServerCard server={c.server} mine={mine} sharedBy={name} color={textColor} /> : null}
-            {c && (c.t === 'text' || (c.t === 'file' && c.body)) ? (
-              <MarkdownText text={c.t === 'text' ? c.body : c.body!} color={textColor} onLinkLongPress={onLongPress} />
+            {c && (c.t === 'text' || (c.t === 'file' && body)) ? (
+              <MarkdownText text={body} color={textColor} onLinkLongPress={onLongPress} nameOf={nameOf} meId={meId} />
             ) : null}
           </Pressable>
           {entries.length > 0 && (
@@ -1186,9 +1339,13 @@ const MessageRow = React.memo(function MessageRow({
             </Pressable>
           </View>
         ) : (
-          (lastInGroup || msg.pending) && (
+          (lastInGroup || msg.pending || editLabel) && (
             <Text style={styles.time}>
-              {!msg.pending ? time : msg.upload ? `uploading ${uploadPercent(msg.upload.progress)}%` : 'sending…'}
+              {msg.pending
+                ? msg.upload
+                  ? `uploading ${uploadPercent(msg.upload.progress)}%`
+                  : 'sending…'
+                : [lastInGroup ? time : null, editLabel].filter(Boolean).join(' · ')}
             </Text>
           )
         )}
@@ -1580,6 +1737,10 @@ function makeStyles(theme: Theme) {
       paddingHorizontal: 16,
       justifyContent: 'center',
     },
+    saveText: {color: theme.primaryText, fontSize: 14, fontWeight: '700'},
+    mentionList: {borderTopWidth: 1, borderTopColor: theme.border, backgroundColor: theme.surface, paddingVertical: 4},
+    mentionRow: {flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 8},
+    mentionName: {flex: 1, fontSize: 14, fontWeight: '600', color: theme.text},
     jumpButton: {
       position: 'absolute',
       bottom: 12,

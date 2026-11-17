@@ -6,10 +6,14 @@
 // cost on every streaming re-parse, it wasn't worth what it added. Code
 // blocks, inline code, bold/italic and lists (git history) went the same way.
 
+import {MENTION_RE} from './mentions';
+
 export interface InlineRun {
   value: string;
   /** Set on a detected https:// link: the URL to open. */
   url?: string;
+  /** Set on an @mention (`<@id>` in the text): who. The value is the raw token; the renderer shows their name. */
+  mention?: string;
 }
 
 export interface HeadingSegment {
@@ -57,7 +61,21 @@ function parseInline(text: string): InlineRun[] {
     LINK_RE.lastIndex = last;
   }
   if (last < text.length) runs.push({value: text.slice(last)});
-  return runs;
+  return runs.flatMap(r => (r.url ? [r] : splitMentions(r.value)));
+}
+
+function splitMentions(text: string): InlineRun[] {
+  const out: InlineRun[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  MENTION_RE.lastIndex = 0;
+  while ((m = MENTION_RE.exec(text))) {
+    if (m.index > last) out.push({value: text.slice(last, m.index)});
+    out.push({value: m[0], mention: m[1]});
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push({value: text.slice(last)});
+  return out;
 }
 
 const HEADING_RE = /^(#{1,6})\s+(.*)$/;
