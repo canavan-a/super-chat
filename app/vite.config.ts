@@ -84,6 +84,15 @@ export default defineConfig(({mode}) => ({
       '.js',
     ],
   },
+  // The dev server's dependency pre-bundling (esbuild) doesn't use
+  // resolve.extensions above, so without this it took packages' native
+  // files over their .web ones: react-native-safe-area-context's native
+  // SafeAreaProvider rendered as an empty <g> and the page stayed blank.
+  optimizeDeps: {
+    esbuildOptions: {
+      resolveExtensions: ['.web.tsx', '.web.ts', '.web.jsx', '.web.js', '.tsx', '.ts', '.jsx', '.js', '.mjs', '.json'],
+    },
+  },
   define: {
     // react-native-web checks this at runtime.
     'process.env.NODE_ENV': JSON.stringify(mode === 'production' ? 'production' : 'development'),
