@@ -25,6 +25,7 @@ class MainApplication : Application(), ReactApplication {
               add(BlobPackage())
               add(VoiceCallPackage())
               add(CallCuePackage())
+              add(LaunchSplashPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"

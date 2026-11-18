@@ -48,7 +48,7 @@ import {VoiceScreen} from './screens/VoiceScreen';
 import {VoiceBar} from './components/VoiceBar';
 import {session} from './session';
 import {LOCK_NEVER, settingsStore} from './settings';
-import {getRoom, refreshAll, refreshRooms, resetStore, roomList, roomsReady, serverStatus, useStore} from './store';
+import {getRoom, refreshAll, refreshRooms, resetStore, roomList, roomsInSync, roomsReady, serverStatus, useStore} from './store';
 import {Theme, ThemeProvider, useTheme} from './theme';
 
 const TITLES: Record<Route['name'], string> = {
@@ -164,9 +164,14 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
   const styles = makeStyles(theme);
   const rooms = useStore(roomList);
   const ready = useStore(roomsReady);
+  // The splash stays up past the list being ready until every room has been
+  // checked: on a cold start (always, after an update) that's seconds of
+  // crypto in JS, and the app crawls through it. Better the splash than a
+  // list that doesn't respond.
+  const synced = useStore(roomsInSync);
   useEffect(() => {
-    if (ready) splashHold.release();
-  }, [ready]);
+    if (synced) splashHold.release();
+  }, [synced]);
   // The app opens on the room list ('home'); every other screen backs out
   // to it (room settings backs out to its room first).
   const [route, setRoute] = useState<Route>({name: 'home'});
@@ -376,7 +381,7 @@ function AppInner({onForgotten}: {onForgotten: () => void}): React.JSX.Element {
 
   const showingRoomHeader = (route.name === 'room' || route.name === 'roomSettings' || route.name === 'voice') && headerInfo;
   const activeKey = route.name === 'room' || route.name === 'roomSettings' || route.name === 'voice' ? route.key : null;
-  const status = activeKey ? serverStatus(getRoom(activeKey)?.server ?? '') : 'online';
+  const status = useStore(() => (activeKey ? serverStatus(getRoom(activeKey)?.server ?? '') : 'online'));
 
   return (
     <View style={styles.container}>

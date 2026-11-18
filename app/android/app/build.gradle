@@ -161,6 +161,16 @@ dependencies {
     implementation "androidx.core:core-telecom:1.0.1"
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"
 
+    // The launcher icon on screen from the first frame (MainActivity,
+    // LaunchSplashModule.kt) instead of a blank window while the app starts.
+    implementation "androidx.core:core-splashscreen:1.0.1"
+
+    // Installs the baseline profiles react-android, Hermes and AndroidX ship,
+    // so the first launches after an install or update run precompiled code
+    // instead of crawling through the interpreter until the phone's
+    // background dexopt gets around to the app.
+    implementation "androidx.profileinstaller:profileinstaller:1.4.1"
+
     // FCM wake-ups, Google Play build only (src/play): the sideload build has
     // no Google code at all. Firebase's settings are src/play/res/values/
     // google_services.xml rather than the google-services Gradle plugin,

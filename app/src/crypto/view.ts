@@ -104,7 +104,9 @@ export async function extendReplay(
     applyEvent(state, e);
     if (e.kind === 'epoch') commits[e.pub.epoch] = e.pub.commit;
     parsed.push(e);
-    if (pause && ++n % 32 === 0) await pause();
+    // Each event is a signature check in JS: a few at a time, so taps
+    // aren't left waiting behind a long log.
+    if (pause && ++n % 8 === 0) await pause();
   }
   return {state, events: parsed, commits};
 }

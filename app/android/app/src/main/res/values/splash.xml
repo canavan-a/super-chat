@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Behind the launcher icon on the native launch splash (MainActivity,
+         LaunchSplashModule.kt). The app's chosen theme isn't known this early,
+         so it follows the system's light/dark setting (values-night). -->
+    <color name="launch_splash_bg">#ffffff</color>
+</resources>

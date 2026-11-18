@@ -56,6 +56,7 @@ import {
   OFFLINE_GRACE_MS,
   markRead,
   openRoom,
+  viewRoom,
   peekImage,
   react,
   retryUpload,
@@ -110,6 +111,8 @@ export function RoomScreen({
 
   useEffect(() => {
     openRoom(roomKey);
+    // While it's on screen, catch-ups after time away bring it fully up to date first.
+    return viewRoom(roomKey);
   }, [roomKey]);
 
   // A failed load gets another go within the grace period, so "Connecting…"
@@ -268,9 +271,10 @@ export function RoomScreen({
     }
   };
 
-  // Opening with lines already held (cached, or the room list's preview):
-  // they show straight away, and this says the rest is on its way.
-  const catchingUp = room.loading && !room.loaded && room.messages.length > 0;
+  // Lines already held (cached, the room list's preview, or from before time
+  // away) show straight away, and this says the rest is on its way. Not for
+  // paging up or down, which has its own spinner.
+  const catchingUp = !!room.opening && room.messages.length > 0;
 
   const typing = Object.entries(room.typing)
     .filter(([, until]) => until > Date.now())

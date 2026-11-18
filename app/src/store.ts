@@ -169,6 +169,10 @@ const listeners = new Set<() => void>();
 let version = 0;
 let lastRead: Record<string, number> = {};
 let roomsLoaded = false;
+// Past roomsLoaded (the list can draw from last launch's cache): every room's
+// log has been checked and its keys opened. On a cold start that's a lot of
+// crypto in JS, which makes the app crawl, so the launch splash stays up for it.
+let roomsSynced = false;
 const LAST_READ_KEY = 'superchat.lastRead.v1';
 
 function emit() {
@@ -220,7 +224,7 @@ function saveListCacheSoon() {
     listCache = rows;
     const sealed = b64(aeadSeal(listCacheKey(), utf8(JSON.stringify(rows)), LIST_CACHE_AD));
     AsyncStorage.setItem(LIST_CACHE_KEY, sealed).catch(() => {});
-    saveMessageCaches();
+    saveMessageCaches().catch(() => {});
   }, 3000);
 }
 
@@ -276,20 +280,35 @@ async function loadMessageCaches(list: Room[]): Promise<void> {
     } catch {
       // another account's, or damaged: the server has it all anyway
     }
+    await yieldToUi(); // a room at a time, as saveMessageCaches
   }
 }
 
-function saveMessageCaches() {
-  const key = msgCacheKey();
-  for (const r of rooms.values()) {
-    // Only the bottom of the chat, as loaded from the server.
-    if (r.hasNewer || r.fromCache || !r.loaded) continue;
-    if (msgCacheSaved.get(r.key) === r.messages && (!r.view || peopleSaved.get(r.key) === r.view)) continue;
-    msgCacheSaved.set(r.key, r.messages);
-    if (r.view) peopleSaved.set(r.key, r.view);
-    const people = r.view ? {names: r.view.names, avatars: r.view.avatars} : r.people;
-    const c: CachedMessages = {wipeSeen: r.wipeSeen, messages: r.messages.filter(m => !m.pending).slice(-MSG_CACHE_SIZE), people};
-    AsyncStorage.setItem(msgCacheName(r), b64(aeadSeal(key, utf8(JSON.stringify(c)), MSG_CACHE_AD))).catch(() => {});
+let savingMessageCaches = false;
+
+/**
+ * One room per tick: sealing each changed room's page in one go (after a
+ * catch-up, every room) held the JS thread long enough to swallow taps.
+ */
+async function saveMessageCaches() {
+  if (savingMessageCaches) return; // the next save picks up whatever this one misses
+  savingMessageCaches = true;
+  try {
+    const key = msgCacheKey();
+    for (const r of [...rooms.values()]) {
+      if (!session.get()) return;
+      // Only the bottom of the chat, as loaded from the server.
+      if (r.hasNewer || r.fromCache || !r.loaded || !rooms.has(r.key)) continue;
+      if (msgCacheSaved.get(r.key) === r.messages && (!r.view || peopleSaved.get(r.key) === r.view)) continue;
+      msgCacheSaved.set(r.key, r.messages);
+      if (r.view) peopleSaved.set(r.key, r.view);
+      const people = r.view ? {names: r.view.names, avatars: r.view.avatars} : r.people;
+      const c: CachedMessages = {wipeSeen: r.wipeSeen, messages: r.messages.filter(m => !m.pending).slice(-MSG_CACHE_SIZE), people};
+      AsyncStorage.setItem(msgCacheName(r), b64(aeadSeal(key, utf8(JSON.stringify(c)), MSG_CACHE_AD))).catch(() => {});
+      await yieldToUi();
+    }
+  } finally {
+    savingMessageCaches = false;
   }
 }
 
@@ -312,18 +331,76 @@ export function subscribe(l: () => void): () => void {
   return () => listeners.delete(l);
 }
 
-/** Re-renders when the store changes and returns selector(store) each time. */
+/**
+ * Returns selector(store), re-rendering when what it selects changes.
+ *
+ * Only when it changes: re-rendering every subscriber on every change (the
+ * app root, each room list row, each avatar in a chat) for every typing
+ * ping and every message caught up kept the JS thread busy enough that taps
+ * waited. The store replaces what it changes rather than mutating it (see
+ * ingest), so comparing is cheap: a value that's a new array or object is
+ * compared a couple of levels deep, and the same object (a Room, updated in
+ * place at the top level) by its own fields.
+ */
 export function useStore<T>(selector: () => T): T {
   const [, force] = useReducer((n: number) => n + 1, 0);
   const sel = useRef(selector);
   sel.current = selector;
-  useEffect(() => subscribe(force), []);
-  return sel.current();
+  const last = useRef<{value: T; fields: unknown[] | null} | null>(null);
+  useEffect(
+    () =>
+      subscribe(() => {
+        const prev = last.current;
+        let next: T;
+        try {
+          next = sel.current();
+        } catch {
+          return force(); // let the render throw it, as before
+        }
+        if (!prev || changed(prev, next)) force();
+      }),
+    [],
+  );
+  const value = sel.current();
+  last.current = {value, fields: isPlain(value) ? Object.values(value) : null};
+  return value;
+}
+
+const isPlain = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
+
+function changed<T>(prev: {value: T; fields: unknown[] | null}, next: T): boolean {
+  if (prev.value !== next) return !same(prev.value, next, 2);
+  // The same object: changed if any of its fields were replaced since.
+  if (!prev.fields || !isPlain(next)) return false;
+  const now = Object.values(next);
+  return now.length !== prev.fields.length || now.some((v, i) => !Object.is(v, prev.fields![i]));
+}
+
+/** Equal, comparing arrays and plain objects `depth` levels deep and the rest by identity. */
+function same(a: unknown, b: unknown, depth: number): boolean {
+  if (Object.is(a, b)) return true;
+  if (depth === 0) return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((x, i) => same(x, b[i], depth - 1));
+  }
+  if (!isPlain(a) || !isPlain(b)) return false;
+  const ka = Object.keys(a);
+  if (ka.length !== Object.keys(b).length) return false;
+  return ka.every(k => k in b && same(a[k], b[k], depth - 1));
 }
 
 export const getRoom = (key: string): Room | undefined => rooms.get(key);
 export const storeVersion = () => version;
 export const roomsReady = () => roomsLoaded;
+export const roomsInSync = () => roomsSynced;
+
+function markSynced() {
+  if (roomsSynced) return;
+  roomsSynced = true;
+  emit();
+}
 
 export interface RoomListItem {
   key: string;
@@ -495,7 +572,21 @@ function forgetRoom(key: string) {
 // ---- loading ----
 
 /** Fetches and verifies a room's log and our keys for it. */
-async function loadState(r: Room): Promise<void> {
+/**
+ * Loads (or extends) a room's verified log, once at a time per room: a
+ * reconnect and an unlock both asked at the same moment, and each re-checked
+ * the same new events.
+ */
+const stateLoads = new Map<string, Promise<void>>();
+function loadState(r: Room): Promise<void> {
+  const running = stateLoads.get(r.key);
+  if (running) return running;
+  const p = loadStateNow(r).finally(() => stateLoads.delete(r.key));
+  stateLoads.set(r.key, p);
+  return p;
+}
+
+async function loadStateNow(r: Room): Promise<void> {
   // With the log held, only what came after it: the rest was verified
   // already, and re-checking every signature on each load is what made
   // opening slow on long-lived rooms.
@@ -589,6 +680,9 @@ async function loadKeys(r: Room): Promise<void> {
 export async function refreshRooms(): Promise<void> {
   try {
     await loadRooms();
+  } catch (e) {
+    markSynced(); // it never got as far as the rooms: don't wait for them
+    throw e;
   } finally {
     // Whatever went wrong, the list mustn't sit on "Loading" for ever: it
     // shows what loaded (rooms with errors say so when opened).
@@ -656,6 +750,7 @@ async function loadRooms(): Promise<void> {
   await Promise.race([work, new Promise(res => setTimeout(res, ROOMS_READY_WAIT_MS))]);
   roomsLoaded = true;
   emit();
+  work.then(markSynced, markSynced);
   work.then(emit).catch(() => {});
 }
 
@@ -879,17 +974,95 @@ export async function refreshAll(): Promise<void> {
     lastFullRefresh = Date.now();
     await refreshRooms().catch(() => {});
   }
-  await Promise.all(
-    [...rooms.values()].map(async r => {
-      if (!r.log || r.loading) return;
-      const newest = newestKnown(r);
-      if (!newest) return prefetchLatest(r).catch(() => {});
-      const page = await api.messages(r.server, r.id, r.me, {after: newest.pos, limit: 200}).catch(() => []);
+  await catchUpRooms([...rooms.values()].filter(r => r.log));
+}
+
+// ---- catching up after time away ----
+//
+// Back after a while (an unlock, a reconnect, a pull), every room may have
+// news. Each message is a decrypt and a signature check in JS, on the UI
+// thread, so catching every room up in full at once froze the app: taps
+// queued up and then all landed at once. Now only a room on screen catches
+// up in full; the rest just get enough for the list (catchUpPreview), and
+// their full catch-up happens when they're opened. A few rooms at a time,
+// the one on screen first, while the room list says it's updating.
+
+/** Rooms on screen (RoomScreen), which catch up in full. */
+const viewing = new Set<string>();
+
+/** RoomScreen, while it shows `key`. Returns the cleanup. */
+export function viewRoom(key: string): () => void {
+  viewing.add(key);
+  return () => viewing.delete(key);
+}
+
+/** Catch-ups under way, for the room list's "Updating chats…". */
+let catchingUp = 0;
+export const roomsCatchingUp = () => catchingUp > 0;
+
+/** How many rooms catch up at once. */
+const CATCH_UP_AT_ONCE = 3;
+/** A room off screen more than this far behind starts over from its newest page. */
+const PREVIEW_PAGE = 50;
+
+async function catchUpRooms(list: Room[]): Promise<void> {
+  if (!list.length) return;
+  catchingUp++;
+  emit();
+  try {
+    const queue = [...list.filter(r => viewing.has(r.key)), ...list.filter(r => !viewing.has(r.key))];
+    const worker = async () => {
+      for (let r = queue.shift(); r; r = queue.shift()) {
+        await catchUpRoom(r).catch(() => {});
+        emit();
+      }
+    };
+    await Promise.all(Array.from({length: CATCH_UP_AT_ONCE}, worker));
+  } finally {
+    catchingUp--;
+    emit();
+  }
+}
+
+function catchUpRoom(r: Room): Promise<void> {
+  if (viewing.has(r.key)) return openRoom(r.key, false);
+  // Already being opened or paged: that's catching it up.
+  if (r.opening) return r.opening.catch(() => {});
+  if (r.loading) return Promise.resolve();
+  const p = catchUpPreview(r);
+  r.opening = p;
+  return p.finally(() => {
+    if (r.opening === p) r.opening = undefined;
+  });
+}
+
+/**
+ * A room off screen: what's new if it's a little, or else just its newest
+ * page, as for a room never opened. That's at most a page to decrypt instead
+ * of up to four, and opening it later continues from there.
+ */
+async function catchUpPreview(r: Room): Promise<void> {
+  r.loading = true;
+  try {
+    const newest = newestKnown(r);
+    if (!newest || r.fromCache) {
+      await loadLatest(r);
+      return;
+    }
+    const page = await api.messages(r.server, r.id, r.me, {after: newest.pos, limit: PREVIEW_PAGE});
+    if (page.length < PREVIEW_PAGE && !r.hasNewer) {
       await ingestPage(r, page);
       announceCaughtUp(r, page);
-    }),
-  );
-  emit();
+    } else {
+      // Far behind: start over from the bottom, and let opening it do the rest.
+      await loadLatest(r);
+      r.loaded = false;
+    }
+  } catch {
+    // offline or the server's down: opening the room tries again and says so
+  } finally {
+    r.loading = false;
+  }
 }
 
 /**
@@ -954,7 +1127,10 @@ export async function openRoom(key: string, fresh = true): Promise<void> {
   try {
     await opening;
   } finally {
-    if (r.opening === opening) r.opening = undefined;
+    if (r.opening === opening) {
+      r.opening = undefined;
+      emit(); // the room screen's "Loading messages…" goes by this
+    }
   }
 }
 
@@ -1305,21 +1481,23 @@ async function resync(server: string) {
   // Every room at once, as loadRooms does. Right after launch the logs were
   // just loaded: reloading (and re-verifying) each one again, one by one,
   // held up the room being opened.
+  const list = [...rooms.values()].filter(x => x.server === server);
   await Promise.all(
-    [...rooms.values()]
-      .filter(x => x.server === server)
-      .map(async r => {
-        try {
-          if (Date.now() - (r.syncedAt ?? 0) > RESYNC_RELOAD_AFTER_MS) await loadState(r);
-          if (r.loaded) await openRoom(r.key, false);
-          maybeRotate(r).catch(() => {});
-        } catch (e) {
-          if (e instanceof ApiError && e.status === 404) forgetRoom(r.key);
-          else r.error = String((e as Error).message ?? e);
-        }
-      }),
+    list.map(async r => {
+      try {
+        if (Date.now() - (r.syncedAt ?? 0) > RESYNC_RELOAD_AFTER_MS) await loadState(r);
+        // Queued with the rest of the upkeep: every room rotating at once
+        // (back after a week away) froze the app.
+        upkeepLater(() => maybeRotate(r));
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) forgetRoom(r.key);
+        else r.error = String((e as Error).message ?? e);
+      }
+    }),
   );
-  emit();
+  // Rooms that were showing messages catch up: the one on screen in full,
+  // the rest only as far as the list needs (catchUpRooms).
+  await catchUpRooms(list.filter(r => rooms.has(r.key) && r.log && (r.loaded || viewing.has(r.key))));
   // Ask who's in voice now, rather than waiting for the next heartbeats.
   for (const r of [...rooms.values()].filter(x => x.server === server)) probeVoice(r);
   serverReadyListeners.forEach(l => l(server));
@@ -1417,10 +1595,10 @@ function scheduleVoiceExpiry() {
   let next = Infinity;
   const now = Date.now();
   for (const r of rooms.values()) {
-    for (const [k, p] of Object.entries(r.voice)) {
-      if (p.expires <= now) delete r.voice[k];
-      else next = Math.min(next, p.expires);
-    }
+    const live = Object.entries(r.voice).filter(([, p]) => p.expires > now);
+    // Replaced, not edited in place: useStore spots changes by reference.
+    if (live.length !== Object.keys(r.voice).length) r.voice = Object.fromEntries(live);
+    for (const [, p] of live) next = Math.min(next, p.expires);
   }
   if (next < Infinity) {
     voiceTimer = setTimeout(() => {
@@ -1526,7 +1704,14 @@ async function handlePush(server: string, msg: any) {
       if (msg.member === r.me.id) return;
       r.typing = {...r.typing, [msg.member]: Date.now() + 6000};
       emit();
-      setTimeout(emit, 6100);
+      setTimeout(() => {
+        // Dropped, not left to expire: useStore re-renders on replaced fields.
+        const now = Date.now();
+        const live = Object.entries(r.typing).filter(([, until]) => until > now);
+        if (live.length === Object.keys(r.typing).length) return;
+        r.typing = Object.fromEntries(live);
+        emit();
+      }, 6100);
       return;
     }
     case 'removed': {
@@ -1632,7 +1817,14 @@ async function loadMyAvatar() {
   }
 }
 
-export const getMyAvatar = (): Uint8Array | null => (myAvatar?.data ? unb64(myAvatar.data) : null);
+// Decoded once per picture, not on every store change (SettingsScreen selects it).
+let myAvatarDecoded: {from: string; bytes: Uint8Array} | null = null;
+export const getMyAvatar = (): Uint8Array | null => {
+  const data = myAvatar?.data;
+  if (!data) return null;
+  if (myAvatarDecoded?.from !== data) myAvatarDecoded = {from: data, bytes: unb64(data)};
+  return myAvatarDecoded.bytes;
+};
 
 /** Sets (or, with null, removes) the profile picture in every room. */
 export async function setMyAvatar(jpeg: Uint8Array | null): Promise<void> {
@@ -2356,6 +2548,7 @@ export function resetStore() {
   blobCache.clear();
   clearSealed().catch(() => {});
   roomsLoaded = false;
+  roomsSynced = false;
   AsyncStorage.removeItem(ROOMS_KEY).catch(() => {});
   myAvatar = null;
   AsyncStorage.removeItem(MY_AVATAR_KEY).catch(() => {});

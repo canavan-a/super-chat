@@ -1,12 +1,13 @@
 /**
  * @format
  */
-import 'react-native';
+import {NativeModules} from 'react-native';
 import React from 'react';
 import {afterEach, beforeEach, describe, expect, it, jest} from '@jest/globals';
 import renderer, {act} from 'react-test-renderer';
 
 import {MAX_SPLASH_STRIKES, SplashBoundary, SplashGate, resetSplashForTests} from '../src/logo/SplashGate';
+import {resetLaunchSplashForTests} from '../src/logo/launchSplash';
 import {SPLASH_TIMING, SPLASH_TOTAL, SplashScreen} from '../src/logo/SplashScreen';
 import {WORD_STRIPS} from '../src/logo/LogoArt';
 import {settingsStore} from '../src/settings';
@@ -254,6 +255,43 @@ describe('SplashGate', () => {
     expect(tree.root.findAll(n => n.props?.testID === 'app').length).toBeGreaterThan(0);
     await act(async () => tree.unmount());
     await settingsStore.save({...settingsStore.get(), launchSplash: true});
+  });
+
+  describe('native launch splash', () => {
+    const hide = jest.fn();
+    beforeEach(() => {
+      resetLaunchSplashForTests();
+      hide.mockClear();
+      NativeModules.LaunchSplash = {hide};
+    });
+    afterEach(() => {
+      delete NativeModules.LaunchSplash;
+    });
+
+    it('stays up while settings load, then hands over to the JS splash once', async () => {
+      await settingsStore.load();
+      await settingsStore.save({...settingsStore.get(), launchSplash: true, splashStrikes: 0});
+      const tree = await mountGate();
+      expect(hasSplash(tree)).toBe(true);
+      await act(async () => {
+        jest.advanceTimersByTime(SPLASH_TOTAL + 500);
+      });
+      expect(hide).toHaveBeenCalledTimes(1);
+      await act(async () => tree.unmount());
+    });
+
+    it('hands straight over to the app when the JS splash is off', async () => {
+      await settingsStore.load();
+      await settingsStore.save({...settingsStore.get(), launchSplash: false});
+      const tree = await mountGate();
+      await act(async () => {
+        jest.advanceTimersByTime(50);
+      });
+      expect(hasSplash(tree)).toBe(false);
+      expect(hide).toHaveBeenCalledTimes(1);
+      await act(async () => tree.unmount());
+      await settingsStore.save({...settingsStore.get(), launchSplash: true});
+    });
   });
 
   it('shows the splash in the saved theme, not the default one', async () => {

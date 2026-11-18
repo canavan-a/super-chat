@@ -1,7 +1,9 @@
 package com.superchatapp
 
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.WindowManager
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
@@ -15,6 +17,13 @@ class MainActivity : ReactActivity() {
     // (Off only in a build made with -PallowScreenshots=true, for store screenshots.)
     if (!BuildConfig.ALLOW_SCREENSHOTS) {
       window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+    }
+    // The launcher icon from the first frame (Theme.App.Starting), kept up
+    // until JS has drawn its own splash or the app (LaunchSplashModule.kt),
+    // and never longer than LaunchSplash.MAX_MS.
+    val shownAt = SystemClock.uptimeMillis()
+    installSplashScreen().setKeepOnScreenCondition {
+      !LaunchSplash.jsReady && SystemClock.uptimeMillis() - shownAt < LaunchSplash.MAX_MS
     }
     super.onCreate(savedInstanceState)
   }

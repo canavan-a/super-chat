@@ -3,6 +3,7 @@ import {StyleSheet, View} from 'react-native';
 
 import {settingsStore} from '../settings';
 import {useTheme} from '../theme';
+import {hideLaunchSplash} from './launchSplash';
 import {SplashScreen} from './SplashScreen';
 import {splashHold} from './splashHold';
 
@@ -47,6 +48,15 @@ export function SplashGate({children}: {children: React.ReactNode}): React.JSX.E
   const [phase, setPhase] = useState<Phase>(played ? 'done' : 'wait');
   const [hold, setHold] = useState(splashHold.get());
   useEffect(() => splashHold.subscribe(setHold), []);
+
+  // The native launch splash (the icon) covers the wait for settings, then
+  // hands over to the JS splash, or straight to the app when that's off. A
+  // frame later, so whatever replaces it has been drawn.
+  useEffect(() => {
+    if (phase === 'wait') return;
+    const raf = requestAnimationFrame(hideLaunchSplash);
+    return () => cancelAnimationFrame(raf);
+  }, [phase]);
 
   useEffect(() => {
     if (phase !== 'wait') return;

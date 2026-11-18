@@ -1,5 +1,5 @@
 import React, {useMemo, useRef, useState} from 'react';
-import {Alert, FlatList, Pressable, StyleSheet, Text, View} from 'react-native';
+import {ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, View} from 'react-native';
 
 import {voiceSummary} from '../call/engine';
 import {roomVoice, useVoice} from '../call/voice';
@@ -12,7 +12,7 @@ import {tick} from '../haptics';
 import {censor, useFilterWords} from '../moderation/wordFilter';
 import {platformConfirm} from '../platformConfirm';
 import {Route} from '../routes';
-import {getRoom, leave, refreshAll, RoomListItem, useStore} from '../store';
+import {getRoom, leave, refreshAll, RoomListItem, roomsCatchingUp, useStore} from '../store';
 import {Theme, useTheme} from '../theme';
 
 /**
@@ -35,6 +35,7 @@ export function RoomListScreen({
   const filter = useFilterWords();
   const scrollY = useRef(0);
   const showServer = new Set(rooms.map(r => r.server)).size > 1;
+  const updating = useStore(roomsCatchingUp);
   useVoice();
   // Rooms with someone in voice: how many others, and whether we are.
   const inVoice = useStore(() =>
@@ -72,6 +73,14 @@ export function RoomListScreen({
 
   return (
     <View style={styles.container}>
+      {/* Back after time away: the rows show what was there before while
+          they catch up, and this says so. */}
+      {updating && (
+        <View style={styles.updatingRow}>
+          <ActivityIndicator size="small" color={theme.textMuted} />
+          <Text style={styles.updatingText}>Updating chats…</Text>
+        </View>
+      )}
       {/* No loading screen: the list is up from the start (from last launch's
           rooms when there are any), pull-to-refresh works throughout, and
           rows fill in as they load. */}
@@ -209,6 +218,19 @@ function makeStyles(theme: Theme) {
     voiceBadge: {flexDirection: 'row', alignItems: 'center', gap: 3, marginRight: 8},
     voiceBadgeText: {fontSize: 11, fontWeight: '700', color: theme.success},
     container: {flex: 1, backgroundColor: theme.bg},
+    // Same as the room screen's "Loading messages…" row.
+    updatingRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+      backgroundColor: theme.surface,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.border,
+    },
+    updatingText: {color: theme.textMuted, fontSize: 12, fontWeight: '600'},
     center: {flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 32},
     skeletonRow: {paddingHorizontal: 16, paddingVertical: 16, gap: 8, borderBottomWidth: 1, borderBottomColor: theme.border},
     skeletonBar: {height: 12, borderRadius: 6, backgroundColor: theme.surfaceAlt, opacity: 0.6},
