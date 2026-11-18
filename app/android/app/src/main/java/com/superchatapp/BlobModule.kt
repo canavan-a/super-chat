@@ -1,5 +1,6 @@
 package com.superchatapp
 
+import android.net.Uri
 import android.os.Build
 import android.util.Base64
 import com.facebook.react.bridge.Promise
@@ -19,7 +20,9 @@ import javax.crypto.AEADBadTagException
  * thread: the sealed blob from the device cache (src/blobDisk.ts's folder) or
  * else downloaded into it, then decrypted (XChaCha.java) and handed back as a
  * data: URI. In JS the same work (base64, AEAD over megabytes) froze every
- * tap until it finished. Nothing decrypted is written to disk.
+ * tap until it finished. Nothing decrypted is written to disk, except
+ * profile and chat pictures (openToFile), kept in avatars/ so a cold start
+ * shows them with no work at all.
  */
 class BlobModule(private val reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
 
@@ -32,6 +35,45 @@ class BlobModule(private val reactContext: ReactApplicationContext) : ReactConte
   private val locks = Array(16) { Any() }
 
   private fun fileOf(blob: String) = File(dir, blob.replace(Regex("[^A-Za-z0-9_-]"), "_"))
+
+  /** Decrypted pictures (src/blobDisk.ts lists and trims this folder). */
+  private val avatarDir by lazy { File(reactContext.filesDir, "avatars").apply { mkdirs() } }
+
+  /**
+   * A profile or chat picture: as [open], but written decrypted to avatars/
+   * (once; it's named by its blob id, which never changes content) and
+   * resolved with its file:// URI, so JS and the image view never carry the
+   * bytes. Rejects E_UNSUPPORTED where [open] does.
+   */
+  @ReactMethod
+  fun openToFile(blob: String, url: String, headers: ReadableMap, key: String, promise: Promise) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+      promise.reject("E_UNSUPPORTED", "native blob opening needs Android 9")
+      return
+    }
+    workers.execute {
+      try {
+        val out = File(avatarDir, blob.replace(Regex("[^A-Za-z0-9_-]"), "_"))
+        synchronized(locks[(blob.hashCode() and 0x7fffffff) % locks.size]) {
+          if (!out.exists()) {
+            val plain = openLocked(blob, url, headers, key)
+            val tmp = File("${out.path}.${UUID.randomUUID()}.part")
+            try {
+              tmp.writeBytes(plain)
+              if (!tmp.renameTo(out)) throw IllegalStateException("Couldn't save the picture.")
+            } finally {
+              tmp.delete()
+            }
+          }
+        }
+        promise.resolve(Uri.fromFile(out).toString())
+      } catch (e: OutOfMemoryError) {
+        promise.reject("E_BLOB", "That file is too large to show.")
+      } catch (e: Exception) {
+        promise.reject("E_BLOB", e.message ?: "Couldn't open that file.", e)
+      }
+    }
+  }
 
   /**
    * Resolves with "data:<mime>;base64,…". [url] and [headers] are the signed

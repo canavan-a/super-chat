@@ -41,7 +41,7 @@ export function Avatar({roomKey, member, name, size = 32}: {roomKey: string; mem
     // A changed picture: the old one stays up until the new one is ready
     // (no flash back to the initial). A failed load keeps it too.
     let live = true;
-    loadImage(roomKey, asFile(ref))
+    loadImage(roomKey, asFile(ref), true)
       .then(img => live && setUri(img.uri))
       .catch(() => {});
     return () => {

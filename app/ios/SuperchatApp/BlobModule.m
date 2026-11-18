@@ -3,7 +3,8 @@
 // the device cache (src/blobDisk.ts's folder) or is downloaded into it, then
 // is decrypted here and handed back as a data: URI. In JS the same work
 // (base64, AEAD over megabytes) competed with every tap. Nothing decrypted is
-// written to disk.
+// written to disk, except profile and chat pictures (openToFile), kept in
+// avatars/ so a cold start shows them with no work at all.
 //
 // XChaCha20-Poly1305 is plain C (iOS has no ChaCha in CommonCrypto, and
 // CryptoKit is Swift-only, and lacks the X variant), so it can be checked
@@ -372,6 +373,58 @@ RCT_EXPORT_METHOD(open:(NSString *)blob
         return;
       }
       resolve([NSString stringWithFormat:@"data:%@;base64,%@", mime, [plain base64EncodedStringWithOptions:0]]);
+    }
+  });
+}
+
+/**
+ * A profile or chat picture: as open, but written decrypted to avatars/
+ * (once; it's named by its blob id, which never changes content) and
+ * resolved with its file:// URI, so JS and the image view never carry the
+ * bytes. src/blobDisk.ts lists and trims the folder.
+ */
+RCT_EXPORT_METHOD(openToFile:(NSString *)blob
+                  url:(NSString *)url
+                  headers:(NSDictionary *)headers
+                  key:(NSString *)key
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+{
+  dispatch_async(_workers, ^{
+    @autoreleasepool {
+      NSData *fileKey = [[NSData alloc] initWithBase64EncodedString:key options:0];
+      if (fileKey.length != 32) {
+        reject(@"E_BLOB", @"Couldn't open that file.", nil);
+        return;
+      }
+      // Same folder layout as pathOf, under "avatars".
+      NSString *sealedPath = [self pathOf:blob];
+      NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+      NSString *dir = [docs stringByAppendingPathComponent:@"avatars"];
+      NSFileManager *fm = [NSFileManager defaultManager];
+      [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+      NSString *out = [dir stringByAppendingPathComponent:sealedPath.lastPathComponent];
+      NSLock *lock = self->_locks[(blob.hash & 0x7fffffff) % self->_locks.count];
+      NSString *why = nil;
+      [lock lock];
+      if (![fm fileExistsAtPath:out]) {
+        NSData *plain = [self openLocked:blob url:url headers:headers key:fileKey why:&why];
+        if (plain) {
+          NSString *tmp = [out stringByAppendingFormat:@".%@.part", [NSUUID UUID].UUIDString];
+          if (![plain writeToFile:tmp atomically:NO] || ![fm moveItemAtPath:tmp toPath:out error:nil]) {
+            why = @"Couldn't save the picture.";
+          }
+          [fm removeItemAtPath:tmp error:nil];
+        } else if (!why) {
+          why = @"Couldn't open that file.";
+        }
+      }
+      [lock unlock];
+      if (why) {
+        reject(@"E_BLOB", why, nil);
+        return;
+      }
+      resolve([NSURL fileURLWithPath:out].absoluteString);
     }
   });
 }

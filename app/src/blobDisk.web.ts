@@ -5,3 +5,6 @@ export const putSealed = async (_blob: string, _sealed: Uint8Array): Promise<voi
 export const clearSealed = async (): Promise<void> => {};
 export const removeSealed = async (_blobs: string[]): Promise<void> => {};
 export const noteCached = (): void => {};
+export const loadAvatarFiles = async (): Promise<void> => {};
+export const avatarFile = (_blob: string): string | null => null;
+export const noteAvatarFile = (_blob: string, _uri: string): void => {};

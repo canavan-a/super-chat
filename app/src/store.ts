@@ -13,7 +13,7 @@ import {AppState, NativeModules, Platform} from 'react-native';
 import {base64} from '@scure/base';
 
 import {api, ApiError, blobRequest, downloadBlob, uploadBlob} from './api';
-import {clearSealed, getSealed, noteCached, putSealed, removeSealed} from './blobDisk';
+import {avatarFile, clearSealed, getSealed, loadAvatarFiles, noteAvatarFile, noteCached, putSealed, removeSealed} from './blobDisk';
 import {b64EncodeAsync} from './crypto/chunked';
 import {
   aeadOpen,
@@ -703,7 +703,8 @@ async function loadRooms(): Promise<void> {
   }
   const local = await loadLocalList();
   // Draw last launch's list straight away; live data fills in over it.
-  await loadListCache();
+  // Pictures too: those on disk show from the first frame.
+  await Promise.all([loadListCache(), loadAvatarFiles()]);
   for (const [server, ids] of Object.entries(local)) for (const id of ids) ensureRoom(server, id);
   await loadMessageCaches([...rooms.values()]);
   if (Object.keys(listCache).length) {
@@ -2187,6 +2188,8 @@ export interface ShownImage {
  * Only finished URIs: encoding one is real work, and this runs mid-render.
  */
 export function peekImage(ref: FileRef): ShownImage | null {
+  const file = avatarFile(ref.blob);
+  if (file) return {uri: file};
   const uri = uriCache.get(ref.blob);
   if (!uri) return null;
   rememberUri(ref.blob, uri);
@@ -2195,6 +2198,8 @@ export function peekImage(ref: FileRef): ShownImage | null {
 
 interface BlobNative {
   open(blob: string, url: string, headers: Record<string, string>, key: string, mime: string): Promise<string>;
+  /** As open, but writes it decrypted to avatars/ (once) and resolves with its file:// URI. Older builds lack it. */
+  openToFile?(blob: string, url: string, headers: Record<string, string>, key: string): Promise<string>;
 }
 const NativeBlob = Platform.OS === 'android' || Platform.OS === 'ios' ? (NativeModules.Blob as BlobNative | undefined) : undefined;
 
@@ -2205,14 +2210,14 @@ const NativeBlob = Platform.OS === 'android' || Platform.OS === 'ios' ? (NativeM
  * Elsewhere (the browser, older Android) it runs in JS a slice at a time, a
  * couple of images at once, so a screen full of pictures never holds taps up.
  */
-export function loadImage(key: string, ref: FileRef): Promise<ShownImage> {
+export function loadImage(key: string, ref: FileRef, persist = false): Promise<ShownImage> {
   const ready = peekImage(ref);
   if (ready) return Promise.resolve(ready);
   // The same blob asked for again while loading (a row redrawn, a repeated
   // avatar) waits on that load: two at once raced on the native download.
   let p = imageLoads.get(ref.blob);
   if (!p) {
-    p = loadImageOnce(key, ref).finally(() => imageLoads.delete(ref.blob));
+    p = loadImageOnce(key, ref, persist).finally(() => imageLoads.delete(ref.blob));
     imageLoads.set(ref.blob, p);
   }
   return p;
@@ -2234,9 +2239,25 @@ async function inJsImageSlot<T>(job: () => Promise<T>): Promise<T> {
   }
 }
 
-async function loadImageOnce(key: string, ref: FileRef): Promise<ShownImage> {
+/**
+ * persist: a profile or chat picture. Written decrypted to the device
+ * (blobDisk.ts's avatars/) and shown from there, so later launches skip the
+ * work entirely. Attachments stay sealed on disk.
+ */
+async function loadImageOnce(key: string, ref: FileRef, persist: boolean): Promise<ShownImage> {
   const r = rooms.get(key);
   if (!r) throw new Error('room not loaded');
+  if (persist && NativeBlob?.openToFile && !localFile(ref.blob)) {
+    const req = blobRequest(r.server, r.id, r.me, ref.blob);
+    try {
+      const uri = await NativeBlob.openToFile(ref.blob, req.url, req.headers, base64.encode(unb64(ref.key)));
+      noteAvatarFile(ref.blob, uri);
+      noteCached();
+      return {uri};
+    } catch (e) {
+      if ((e as {code?: string}).code !== 'E_UNSUPPORTED') throw e;
+    }
+  }
   const held = localFile(ref.blob) ?? blobCache.get(ref.blob);
   if (!held && NativeBlob) {
     const req = blobRequest(r.server, r.id, r.me, ref.blob);

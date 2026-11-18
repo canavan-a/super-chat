@@ -6,6 +6,10 @@
 //
 // App-private storage, capped by size: the least recently used blobs go
 // first. blobDisk.web.ts is the browser's (no-op) version.
+//
+// The one exception is profile and chat pictures (avatars/, below): those are
+// kept decrypted, written once by native code (BlobModule), so a cold start
+// shows them straight from a file:// URI with no crypto or base64 in JS.
 import RNFS from 'react-native-fs';
 import {b64DecodeAsync, b64EncodeAsync} from './crypto/chunked';
 
@@ -47,8 +51,50 @@ export async function putSealed(blob: string, sealed: Uint8Array): Promise<void>
 /** Removes every cached blob (the account was removed from this device). */
 export async function clearSealed(): Promise<void> {
   ready = null;
-  await RNFS.unlink(DIR).catch(() => {});
+  avatarFiles.clear();
+  await Promise.all([RNFS.unlink(DIR).catch(() => {}), RNFS.unlink(AVATAR_DIR).catch(() => {})]);
 }
+
+// ---- decrypted pictures ----
+
+/** Where BlobModule.openToFile writes them (filesDir / Documents + "/avatars"). */
+const AVATAR_DIR = `${RNFS.DocumentDirectoryPath}/avatars`;
+/** Newest kept up to this; an older one just re-decrypts when next shown. */
+const AVATAR_MAX_BYTES = 20 * 1024 * 1024;
+const safeName = (blob: string) => blob.replace(/[^A-Za-z0-9_-]/g, '_');
+/** Blob id (safe name) to file:// URI, for every picture on disk. */
+const avatarFiles = new Map<string, string>();
+
+/**
+ * Lists the pictures on disk, so avatarFile can answer mid-render. Run once
+ * at launch, before the room list draws. Never throws.
+ */
+export async function loadAvatarFiles(): Promise<void> {
+  try {
+    if (!(await RNFS.exists(AVATAR_DIR))) return;
+    const files = (await RNFS.readDir(AVATAR_DIR)).filter(f => f.isFile());
+    // Left by a write cut short.
+    for (const f of files) if (f.name.endsWith('.part')) RNFS.unlink(f.path).catch(() => {});
+    const done = files.filter(f => !f.name.endsWith('.part'));
+    done.sort((a, b) => (b.mtime?.getTime() ?? 0) - (a.mtime?.getTime() ?? 0));
+    let total = 0;
+    for (const f of done) {
+      total += Number(f.size);
+      if (total > AVATAR_MAX_BYTES) RNFS.unlink(f.path).catch(() => {});
+      else avatarFiles.set(f.name, `file://${f.path}`);
+    }
+  } catch {
+    // none listed: they're opened (and written) again as they're shown
+  }
+}
+
+/** The decrypted picture's file:// URI if it's on disk, synchronously. */
+export const avatarFile = (blob: string): string | null => avatarFiles.get(safeName(blob)) ?? null;
+
+/** BlobModule.openToFile wrote one. */
+export const noteAvatarFile = (blob: string, uri: string): void => {
+  avatarFiles.set(safeName(blob), uri);
+};
 
 let trimTimer: ReturnType<typeof setTimeout> | null = null;
 function trimSoon() {

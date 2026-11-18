@@ -50,7 +50,7 @@ export function ChatAvatar({
     // A changed picture: the old one stays up until the new one is ready
     // (no flash back to the initial). A failed load keeps it too.
     let live = true;
-    loadImage(roomKey, asFile(picture))
+    loadImage(roomKey, asFile(picture), true)
       .then(img => live && setUri(img.uri))
       .catch(() => {});
     return () => {
