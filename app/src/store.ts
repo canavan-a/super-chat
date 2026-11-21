@@ -31,6 +31,7 @@ import {
   DecryptedMessage,
   encryptBlobAsync,
   encryptMessage,
+  attachmentLabel,
   FileRef,
   fingerprint,
   hkdf,
@@ -449,7 +450,7 @@ function previewLine(r: Room): string | null {
   let what = '🔒 Encrypted message';
   const body = mentionsToNames(bodyOf(r, m), id => namesOf(r)[id] ?? 'someone');
   if (c?.t === 'text') what = body;
-  else if (c?.t === 'file') what = body || (c.files.every((f: FileRef) => f.mime.startsWith('image/')) ? '📷 Photo' : `📎 ${c.files[0]?.name ?? 'File'}`);
+  else if (c?.t === 'file') what = body || attachmentLabel(c.files);
   else if (c?.t === 'ice') what = '🔊 Shared a voice server';
   return `${who}: ${what.replace(/\s+/g, ' ').slice(0, 120)}`;
 }
@@ -623,10 +624,10 @@ function forgetMessages(r: Room, gone: (m: ChatMessage) => boolean) {
   const blobs: string[] = [];
   r.messages = r.messages.filter(m => {
     if (m.pending || !gone(m)) return true;
-    if (m.content?.t === 'file') for (const f of m.content.files) blobs.push(f.blob);
+    if (m.content?.t === 'file') for (const f of m.content.files) blobs.push(f.blob, ...(f.thumb ? [f.thumb.blob] : []));
     return false;
   });
-  for (const b of blobs) blobCache.delete(b);
+  for (const b of blobs) forgetBlob(b);
   if (blobs.length) removeSealed(blobs);
   if (r.latest && gone(r.latest)) r.latest = undefined;
   if (r.latestOther && gone(r.latestOther)) r.latestOther = undefined;
@@ -1981,6 +1982,12 @@ export interface Attachment {
   data: Uint8Array;
   w?: number;
   h?: number;
+  /** Video or voice message: seconds long. */
+  dur?: number;
+  /** Voice message: loudness bars (voiceWave.ts). */
+  wave?: number[];
+  /** Video: its poster frame, a small JPEG sent as a blob of its own. */
+  thumb?: {data: Uint8Array; w: number; h: number};
 }
 
 // ---- sending files ----
@@ -2000,6 +2007,8 @@ interface FileUpload {
   replyTo?: string;
   /** Each file once it's on the server. */
   refs: (FileRef | null)[];
+  /** Each video's poster frame once it's on the server, so a retry doesn't send it again; null if it couldn't be. */
+  thumbs: (FileRef | null | undefined)[];
   progress: number[];
   running: boolean;
 }
@@ -2008,11 +2017,32 @@ const UPLOAD_TRIES = 3;
 const UPLOADS_AT_ONCE = 2;
 
 const localBlob = (id: string, i: number) => `local:${id}:${i}`;
+/** A video's poster frame, while it's being sent. */
+const localThumb = (id: string, i: number) => `local:${id}:t${i}`;
 
-/** A picked file still being sent, by its local blob ID. */
+/** A picked file (or a video's poster frame) still being sent, by its local blob ID. */
 function localFile(blob: string): Uint8Array | undefined {
-  const [, id, i] = blob.split(':');
-  return blob.startsWith('local:') ? fileUploads.get(id)?.files[Number(i)]?.data : undefined;
+  if (!blob.startsWith('local:')) return undefined;
+  const [, id, i = ''] = blob.split(':');
+  const thumb = i.startsWith('t');
+  const f = fileUploads.get(id ?? '')?.files[Number(thumb ? i.slice(1) : i)];
+  return thumb ? f?.thumb?.data : f?.data;
+}
+
+/** A file's message ref, while it's still on this device. */
+function localRef(id: string, i: number, f: Attachment): FileRef {
+  return {
+    blob: localBlob(id, i),
+    key: '',
+    name: f.name,
+    mime: f.mime,
+    size: f.data.length,
+    w: f.w,
+    h: f.h,
+    dur: f.dur,
+    wave: f.wave,
+    thumb: f.thumb && {blob: localThumb(id, i), key: '', name: 'poster.jpg', mime: 'image/jpeg', size: f.thumb.data.length, w: f.thumb.w, h: f.thumb.h},
+  };
 }
 
 /**
@@ -2024,9 +2054,9 @@ export async function sendFiles(key: string, files: Attachment[], body: string, 
   if (!r) throw new Error('room not loaded');
   if (r.hasNewer) await jumpToLatest(key);
   const id = `local-${b64(randomBytes(12))}`;
-  const u: FileUpload = {key, id, files, body, replyTo, refs: files.map(() => null), progress: files.map(() => 0), running: false};
+  const u: FileUpload = {key, id, files, body, replyTo, refs: files.map(() => null), thumbs: files.map(() => undefined), progress: files.map(() => 0), running: false};
   fileUploads.set(id, u);
-  files.forEach((f, i) => remember(localBlob(id, i), f.data));
+  // No need to put them in blobCache too: localFile() reads them from fileUploads.
   showUpload(u);
   return runUpload(u);
 }
@@ -2059,9 +2089,7 @@ function showUpload(u: FileUpload, failed?: string) {
     epoch: r.log?.state.epoch ?? 0,
     content: {
       t: 'file',
-      files: u.files.map(
-        (f, i) => u.refs[i] ?? {blob: localBlob(u.id, i), key: '', name: f.name, mime: f.mime, size: f.data.length, w: f.w, h: f.h},
-      ),
+      files: u.files.map((f, i) => u.refs[i] ?? localRef(u.id, i, f)),
       body: u.body || undefined,
       replyTo: u.replyTo,
       ts: Date.now(),
@@ -2091,34 +2119,50 @@ async function runUpload(u: FileUpload): Promise<void> {
     if (!r) throw new Error('room not loaded');
     // A few at a time, each tried again a couple of times before giving up.
     const todo = u.files.map((_, i) => i).filter(i => !u.refs[i]);
+    /** Encrypts and uploads one blob, tried again a couple of times. */
+    const put = async (data: Uint8Array, local: string, onProgress?: (frac: number) => void) => {
+      // Let the bubble paint first; encrypting then runs a slice at a time.
+      await yieldToUi();
+      const {key: fk, sealed} = await encryptBlobAsync(data);
+      let blob = '';
+      for (let tries = 1; !blob; tries++) {
+        try {
+          blob = await uploadBlob(r.server, r.id, r.me, sealed, onProgress);
+        } catch (e) {
+          if (tries >= UPLOAD_TRIES) throw e;
+          await new Promise(res => setTimeout(res, 1000 * tries));
+        }
+      }
+      // What we just sent never needs downloading back.
+      putSealed(blob, sealed);
+      remember(blob, data);
+      // And the picture already on screen keeps showing, not encoded again.
+      const shown = uriCache.get(local);
+      if (shown) rememberUri(blob, shown);
+      return {blob, key: b64(fk)};
+    };
     const worker = async () => {
       for (let i = todo.shift(); i !== undefined; i = todo.shift()) {
         const f = u.files[i];
-        // Let the bubble paint first; encrypting then runs a slice at a time.
-        await yieldToUi();
-        const {key: fk, sealed} = await encryptBlobAsync(f.data);
-        let blob = '';
-        for (let tries = 1; !blob; tries++) {
+        const local = localRef(u.id, i, f);
+        // A video's poster frame first (it's small), so the bubble has a picture as soon as it's sent.
+        // Losing it isn't worth failing the video for: it goes without a picture.
+        if (f.thumb && local.thumb && u.thumbs[i] === undefined) {
           try {
-            blob = await uploadBlob(r.server, r.id, r.me, sealed, frac => progressed(i, frac));
-          } catch (e) {
-            if (tries >= UPLOAD_TRIES) throw e;
-            await new Promise(res => setTimeout(res, 1000 * tries));
+            u.thumbs[i] = {...local.thumb, ...(await put(f.thumb.data, local.thumb.blob))};
+          } catch {
+            u.thumbs[i] = null;
           }
         }
-        // What we just sent never needs downloading back.
-        putSealed(blob, sealed);
-        remember(blob, f.data);
-        // And the picture already on screen keeps showing, not encoded again.
-        const shown = uriCache.get(localBlob(u.id, i));
-        if (shown) rememberUri(blob, shown);
-        u.refs[i] = {blob, key: b64(fk), name: f.name, mime: f.mime, size: f.data.length, w: f.w, h: f.h};
+        const {blob, key: fk} = await put(f.data, local.blob, frac => progressed(i, frac));
+        u.refs[i] = {...local, blob, key: fk, thumb: u.thumbs[i] ?? undefined};
         progressed(i, 1);
       }
     };
     await Promise.all(Array.from({length: Math.min(UPLOADS_AT_ONCE, todo.length)}, worker));
     const refs = u.refs as FileRef[];
-    await send(u.key, {t: 'file', files: refs, body: u.body || undefined, replyTo: u.replyTo}, refs.map(x => x.blob), u.id);
+    const blobs = refs.flatMap(x => (x.thumb ? [x.blob, x.thumb.blob] : [x.blob]));
+    await send(u.key, {t: 'file', files: refs, body: u.body || undefined, replyTo: u.replyTo}, blobs, u.id);
     fileUploads.delete(u.id);
   } catch (e) {
     u.running = false;
@@ -2130,7 +2174,8 @@ async function runUpload(u: FileUpload): Promise<void> {
 }
 
 const blobCache = new Map<string, Uint8Array>();
-export async function fetchFile(key: string, ref: FileRef): Promise<Uint8Array> {
+/** onProgress: how much has downloaded (0–1), when it has to be downloaded at all. */
+export async function fetchFile(key: string, ref: FileRef, onProgress?: (fraction: number) => void): Promise<Uint8Array> {
   const local = localFile(ref.blob);
   if (local) return local;
   const cached = blobCache.get(ref.blob);
@@ -2154,7 +2199,7 @@ export async function fetchFile(key: string, ref: FileRef): Promise<Uint8Array> 
     }
   }
   if (!data) {
-    const sealed = await downloadBlob(r.server, r.id, r.me, ref.blob);
+    const sealed = await downloadBlob(r.server, r.id, r.me, ref.blob, onProgress, ref.size);
     data = await decryptBlobAsync(fileKey, sealed);
     putSealed(ref.blob, sealed);
   }
@@ -2164,10 +2209,21 @@ export async function fetchFile(key: string, ref: FileRef): Promise<Uint8Array> 
 
 // Keep recent files decrypted in memory only (never on disk), least recently
 // used out first.
+// And within a byte budget: a few videos would otherwise fill the 24 slots
+// with hundreds of megabytes.
+const BLOB_CACHE_BYTES = 80 * 1024 * 1024;
+let blobCacheBytes = 0;
 function remember(blob: string, data: Uint8Array) {
-  blobCache.delete(blob);
+  forgetBlob(blob);
   blobCache.set(blob, data);
-  while (blobCache.size > 24) blobCache.delete(blobCache.keys().next().value!);
+  blobCacheBytes += data.length;
+  while (blobCache.size > 1 && (blobCache.size > 24 || blobCacheBytes > BLOB_CACHE_BYTES)) forgetBlob(blobCache.keys().next().value!);
+}
+function forgetBlob(blob: string) {
+  const had = blobCache.get(blob);
+  if (!had) return;
+  blobCacheBytes -= had.length;
+  blobCache.delete(blob);
 }
 
 // And the data: URIs images are shown through, so a row that scrolls back
@@ -2567,6 +2623,7 @@ export function resetStore() {
   vaultSaved.clear();
   rooms.clear();
   blobCache.clear();
+  blobCacheBytes = 0;
   clearSealed().catch(() => {});
   roomsLoaded = false;
   roomsSynced = false;

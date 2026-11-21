@@ -15,12 +15,15 @@ import {
 } from 'react-native';
 
 import type {HeaderInfo} from '../App';
-import {ActivityView, FileRef, fingerprint} from '../crypto';
-import {dataUri, pickFiles, pickImages, PickedFile, saveFileAs, takePhoto} from '../files';
+import {ActivityView, attachmentLabel, FileRef, fingerprint, isAudio, isVideo} from '../crypto';
+import {dataUri, pickFiles, pickMedia, PickedFile, recordVideo, saveFileAs, takePhoto} from '../files';
+import {startVoiceNote, VoiceRecording} from '../voiceNote';
+import {VOICE_SECONDS} from '../voiceWave';
+import {RecordingBar, VideoAttachment, VideoViewer, VoiceAttachment} from '../components/MediaAttachments';
 import {openVoice} from '../call/actions';
 import {Avatar} from '../components/Avatar';
 import {PixelField} from '../components/PixelField';
-import {Icon} from '../components/Icon';
+import {Icon, IconName} from '../components/Icon';
 import {IceServerCard} from '../components/IceServerCard';
 import {ImageViewer} from '../components/ImageViewer';
 import {Overlay} from '../components/Overlay';
@@ -104,6 +107,24 @@ export function RoomScreen({
   const [staged, setStaged] = useState<StagedFile[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
+  // A picked or recorded video being compressed, before it's staged.
+  const [preparing, setPreparing] = useState(false);
+  // A voice message recording (see startRecording): how long so far, and the recent levels.
+  const [recording, setRecording] = useState<{seconds: number; levels: number[]} | null>(null);
+  const recorder = useRef<VoiceRecording | null>(null);
+  // A start in flight (the mic permission prompt can be up), and which start is current.
+  const recordStart = useRef(false);
+  const recordToken = useRef(0);
+  const finishRecordingRef = useRef<(keep: boolean) => void>(() => {});
+  // Leaving the room mid-recording, or mid-start, throws it away.
+  useEffect(
+    () => () => {
+      recordToken.current++;
+      recorder.current?.cancel();
+      recorder.current = null;
+    },
+    [],
+  );
   const lastTyping = useRef(0);
   const roomError = useSettledError(room?.error ?? null);
   // Not yet shown as an error: still trying, and the screen says so.
@@ -234,31 +255,100 @@ export function RoomScreen({
     setCursor(mq.start + insert.length);
   };
 
-  const doAttach = async (kind: 'camera' | 'image' | 'file') => {
+  const doAttach = async (kind: 'camera' | 'video' | 'media' | 'file') => {
     setAttachOpen(false);
     let files: PickedFile[] = [];
+    // Videos are re-encoded before they're staged, which takes a moment: the
+    // pickers say when one starts (not while the picker itself is open).
+    const compressing = () => setPreparing(true);
     try {
-      files = kind === 'camera' ? await takePhoto() : kind === 'image' ? await pickImages() : await pickFiles();
+      files =
+        kind === 'camera'
+          ? await takePhoto()
+          : kind === 'video'
+            ? await recordVideo(compressing)
+            : kind === 'media'
+              ? await pickMedia(compressing)
+              : await pickFiles();
     } catch (e) {
       setError((e as Error).message);
       return;
+    } finally {
+      setPreparing(false);
     }
     if (!files.length) return;
     const tooBig = files.find(f => f.data.length > 24 * 1024 * 1024);
     if (tooBig) {
-      setError(`${tooBig.name} is over 24 MB.`);
+      setError(
+        tooBig.mime.startsWith('video/') ? `${tooBig.name} is over 24 MB even compressed: try a shorter clip.` : `${tooBig.name} is over 24 MB.`,
+      );
       return;
     }
-    const space = MAX_STAGED - staged.length;
-    if (files.length > space) setError(`Up to ${MAX_STAGED} attachments at a time.`);
+    // A message carries up to 10 blobs, and each video's poster frame is one.
+    const blobsOf = (fs: PickedFile[]) => fs.reduce((n, f) => n + (f.thumb ? 2 : 1), 0);
+    let space = MAX_STAGED - staged.length;
+    let fitting = files.slice(0, Math.max(0, space));
+    while (fitting.length && blobsOf(staged.map(s => s.file)) + blobsOf(fitting) > MAX_BLOBS) fitting = fitting.slice(0, -1);
+    if (fitting.length < files.length) setError(`Up to ${MAX_STAGED} attachments (or 5 videos) at a time.`);
     else setError(null);
-    const added = files.slice(0, Math.max(0, space)).map(f => ({
+    const added = fitting.map(f => ({
       id: `${Date.now()}-${Math.random()}`,
       file: f,
-      uri: f.mime.startsWith('image/') ? dataUri(f.mime, f.data) : undefined,
+      uri: f.mime.startsWith('image/') ? dataUri(f.mime, f.data) : f.thumb ? dataUri('image/jpeg', f.thumb.data) : undefined,
     }));
     setStaged(s => [...s, ...added]);
   };
+
+  // ---- voice messages ----
+  // Tap "Voice note" in the attach menu: the composer becomes a recording
+  // bar; Send sends it straight away (with the reply, if one's picked), the
+  // trash throws it away. It stops and sends by itself at VOICE_SECONDS.
+  const startRecording = async () => {
+    setAttachOpen(false);
+    if (recorder.current || recordStart.current) return;
+    // Bumped by finishing or leaving: a start that lands after either is thrown away.
+    const token = ++recordToken.current;
+    recordStart.current = true;
+    setRecording({seconds: 0, levels: []});
+    try {
+      const rec = await startVoiceNote((level, seconds) => {
+        setRecording(r => (r ? {seconds, levels: [...r.levels, level].slice(-48)} : r));
+        // Through the ref: this callback was made at the start, finishing needs today's reply.
+        if (seconds >= VOICE_SECONDS) finishRecordingRef.current(true);
+      });
+      if (token !== recordToken.current) {
+        rec.cancel();
+        return;
+      }
+      recorder.current = rec;
+      setError(null);
+    } catch (e) {
+      if (token !== recordToken.current) return;
+      setRecording(null);
+      setError((e as Error).message);
+    } finally {
+      recordStart.current = false;
+    }
+  };
+  const finishRecording = async (keep: boolean) => {
+    recordToken.current++;
+    const rec = recorder.current;
+    recorder.current = null;
+    setRecording(null);
+    if (!rec) return;
+    if (!keep) return rec.cancel();
+    try {
+      const file = await rec.stop();
+      if (!file) return; // too short to be meant
+      const reply = replyTo?.id;
+      setReplyTo(null);
+      sendFiles(roomKey, [file], '', reply).catch(() => {});
+    } catch (e) {
+      setError(`Couldn't save the recording: ${(e as Error).message}`);
+    }
+  };
+  finishRecordingRef.current = finishRecording;
+
 
   const onChangeDraft = (t: string) => {
     // The cursor's own event may come after this one: typing at the end keeps it at the end.
@@ -396,10 +486,17 @@ export function RoomScreen({
           {staged.map(s => (
             <View key={s.id} style={styles.stagedItem}>
               {s.uri ? (
-                <Image source={{uri: s.uri}} style={styles.stagedThumb} resizeMode="cover" />
+                <View>
+                  <Image source={{uri: s.uri}} style={styles.stagedThumb} resizeMode="cover" />
+                  {s.file.mime.startsWith('video/') && (
+                    <View style={styles.stagedVideo} pointerEvents="none">
+                      <Icon name="play" size={14} color="#fff" />
+                    </View>
+                  )}
+                </View>
               ) : (
                 <View style={[styles.stagedThumb, styles.stagedFile]}>
-                  <Icon name="attach" size={16} color={theme.textMuted} />
+                  <Icon name={s.file.mime.startsWith('video/') ? 'video' : 'file'} size={16} color={theme.textMuted} />
                   <Text style={styles.stagedFileName} numberOfLines={2}>
                     {s.file.name}
                   </Text>
@@ -417,6 +514,22 @@ export function RoomScreen({
         </ScrollView>
       )}
 
+      {preparing && (
+        <View style={styles.preparingRow}>
+          <ActivityIndicator size="small" color={theme.textMuted} />
+          <Text style={styles.preparingText}>Compressing video…</Text>
+        </View>
+      )}
+
+      {recording ? (
+        <RecordingBar
+          seconds={recording.seconds}
+          levels={recording.levels}
+          theme={theme}
+          onCancel={() => finishRecording(false)}
+          onSend={() => finishRecording(true)}
+        />
+      ) : (
       <View style={styles.composer}>
         {!editing && (
           <Pressable style={styles.attachButton} onPress={() => setAttachOpen(true)} accessibilityLabel="Attach">
@@ -447,21 +560,26 @@ export function RoomScreen({
           {editing ? <Text style={styles.saveText}>Save</Text> : <Icon name="send" size={18} color={theme.primaryText} />}
         </Pressable>
       </View>
+      )}
 
       <Overlay visible={attachOpen} onClose={() => setAttachOpen(false)} style={styles.sheetBackdrop}>
           <View style={styles.sheet}>
-            <Pressable style={styles.menuRow} onPress={() => doAttach('camera')}>
-              <Text style={styles.menuRowText}>Take photo</Text>
-            </Pressable>
-            <View style={styles.menuDivider} />
-            <Pressable style={styles.menuRow} onPress={() => doAttach('image')}>
-              <Text style={styles.menuRowText}>Gallery</Text>
-            </Pressable>
-            <View style={styles.menuDivider} />
-            <Pressable style={styles.menuRow} onPress={() => doAttach('file')}>
-              <Text style={styles.menuRowText}>File</Text>
-            </Pressable>
-            <Text style={styles.sheetHint}>Encrypted on this device before upload. Photos are re-encoded, which strips location data.</Text>
+            {ATTACH_ROWS.map((row, i) => (
+              <React.Fragment key={row.kind}>
+                {i > 0 && <View style={styles.menuDivider} />}
+                <Pressable
+                  style={[styles.menuRow, styles.attachRow]}
+                  onPress={() => (row.kind === 'voice' ? startRecording() : doAttach(row.kind))}>
+                  <View style={[styles.attachIcon, {backgroundColor: row.color}]}>
+                    <Icon name={row.icon} size={18} color="#fff" />
+                  </View>
+                  <Text style={styles.menuRowText}>{row.label}</Text>
+                </Pressable>
+              </React.Fragment>
+            ))}
+            <Text style={styles.sheetHint}>
+              Encrypted on this device before upload. Photos and videos are re-encoded, which strips location data.
+            </Text>
           </View>
       </Overlay>
     </View>
@@ -472,7 +590,7 @@ export function RoomScreen({
     if (!c) return 'Encrypted message';
     const body = mentionsToNames(bodyOf(room, m), nameOf);
     if (c.t === 'text') return body;
-    if (c.t === 'file') return body || `📎 ${c.files.map(f => f.name).join(', ')}`;
+    if (c.t === 'file') return body || attachmentLabel(c.files);
     if (c.t === 'ice') return '🔊 Voice server';
     return '';
   }
@@ -560,20 +678,43 @@ function ChatList({
   const [whoFor, setWhoFor] = useState<ChatMessage | null>(null);
   const [viewer, setViewerRaw] = useState<{uri: string; ref: FileRef} | null>(null);
   const [viewerSave, setViewerSave] = useState<'saving' | 'saved' | {error: string} | null>(null);
+  // A video playing full screen; shares the save button and its state with the photo viewer.
+  const [video, setVideoRaw] = useState<FileRef | null>(null);
   const setViewer = (v: typeof viewer) => {
     setViewerSave(null);
     setViewerRaw(v);
   };
+  const setVideo = useCallback((v: FileRef | null) => {
+    setViewerSave(null);
+    setVideoRaw(v);
+  }, []);
   const saveViewed = async () => {
-    if (!viewer || viewerSave === 'saving') return;
+    const ref = viewer?.ref ?? video;
+    if (!ref || viewerSave === 'saving') return;
     setViewerSave('saving');
     try {
-      const saved = await saveFileAs(viewer.ref.name, viewer.ref.mime, () => fetchFile(room.key, viewer.ref));
+      const saved = await saveFileAs(ref.name, ref.mime, () => fetchFile(room.key, ref));
       setViewerSave(saved ? 'saved' : null);
     } catch (e) {
       setViewerSave({error: (e as Error).message || "Couldn't save"});
     }
   };
+  /** Save and Close, under a photo or video shown full screen. */
+  const viewerFooter = (close: () => void) => (
+    <>
+      <View style={styles.viewerActions}>
+        <Pressable style={styles.viewerButton} onPress={saveViewed} disabled={viewerSave === 'saving'}>
+          {viewerSave === 'saving' ? <ActivityIndicator size="small" color="#fff" /> : <Icon name="download" size={18} color="#fff" />}
+          <Text style={styles.viewerButtonText}>{viewerSave === 'saving' ? 'Saving…' : viewerSave === 'saved' ? 'Saved' : 'Save'}</Text>
+        </Pressable>
+        <Pressable style={styles.viewerButton} onPress={close}>
+          <Icon name="close" size={18} color="#fff" />
+          <Text style={styles.viewerButtonText}>Close</Text>
+        </Pressable>
+      </View>
+      {viewerSave && typeof viewerSave === 'object' && <Text style={styles.viewerError}>Couldn't save: {viewerSave.error}</Text>}
+    </>
+  );
   const loadingOlderRef = useRef(false);
 
   const hidden = useHidden(room.key);
@@ -774,6 +915,7 @@ function ChatList({
         }}
         onReact={emoji => react(room.key, item.id, emoji).catch(() => {})}
         onOpenImage={setViewer}
+        onOpenVideo={setVideo}
         onShowReactions={setWhoFor}
         onAvatarPress={Platform.OS === 'ios' ? () => setMemberFor(item.sender) : undefined}
         onJumpTo={jumpToMessage}
@@ -1014,30 +1156,21 @@ function ChatList({
         </View>
       </Overlay>
 
+      {video && (
+        <VideoViewer
+          key={video.blob}
+          roomKey={room.key}
+          file={video}
+          onClose={() => setVideo(null)}
+          footer={viewerFooter(() => setVideo(null))}
+        />
+      )}
       {viewer && (
         <ImageViewer
           key={viewer.uri}
           uri={viewer.uri}
           onClose={() => setViewer(null)}
-          footer={
-            <>
-              <View style={styles.viewerActions}>
-                <Pressable style={styles.viewerButton} onPress={saveViewed} disabled={viewerSave === 'saving'}>
-                  {viewerSave === 'saving' ? <ActivityIndicator size="small" color="#fff" /> : <Icon name="download" size={18} color="#fff" />}
-                  <Text style={styles.viewerButtonText}>
-                    {viewerSave === 'saving' ? 'Saving…' : viewerSave === 'saved' ? 'Saved' : 'Save'}
-                  </Text>
-                </Pressable>
-                <Pressable style={styles.viewerButton} onPress={() => setViewer(null)}>
-                  <Icon name="close" size={18} color="#fff" />
-                  <Text style={styles.viewerButtonText}>Close</Text>
-                </Pressable>
-              </View>
-              {viewerSave && typeof viewerSave === 'object' && (
-                <Text style={styles.viewerError}>Couldn't save: {viewerSave.error}</Text>
-              )}
-            </>
-          }
+          footer={viewerFooter(() => setViewer(null))}
         />
       )}
     </View>
@@ -1138,6 +1271,7 @@ const MessageRow = React.memo(function MessageRow({
   onLongPress,
   onReact,
   onOpenImage,
+  onOpenVideo,
   onShowReactions,
   onAvatarPress,
   onJumpTo,
@@ -1167,6 +1301,7 @@ const MessageRow = React.memo(function MessageRow({
   onLongPress: () => void;
   onReact: (emoji: string) => void;
   onOpenImage: (v: {uri: string; ref: FileRef}) => void;
+  onOpenVideo: (ref: FileRef) => void;
   /** Long-press on the reactions: who reacted with what. */
   onShowReactions: (m: ChatMessage) => void;
   /** Tap on their picture: report or block them (iOS, for App Review). */
@@ -1271,7 +1406,7 @@ const MessageRow = React.memo(function MessageRow({
                   {reply.content?.t === 'text'
                     ? censor(replyText ?? '', filter)
                     : reply.content?.t === 'file'
-                      ? '📎 Attachment'
+                      ? censor(replyText ?? '', filter) || attachmentLabel(reply.content.files)
                       : reply.content?.t === 'ice'
                         ? '🔊 Voice server'
                         : 'Message'}
@@ -1281,7 +1416,30 @@ const MessageRow = React.memo(function MessageRow({
             {!c && <Text style={[styles.brokenText, {color: textColor}]}>🔒 {msg.error ?? 'Encrypted message'}</Text>}
             {c?.t === 'file' &&
               c.files.map((f, i) =>
-                f.mime.startsWith('image/') ? (
+                isVideo(f) ? (
+                  <VideoAttachment
+                    key={f.blob}
+                    roomKey={roomKey}
+                    file={f}
+                    progress={msg.upload && !msg.upload.failed ? msg.upload.progress[i] : undefined}
+                    theme={theme}
+                    onOpen={onOpenVideo}
+                    onTap={tap}
+                    onLongPress={onLongPress}
+                  />
+                ) : isAudio(f) ? (
+                  <VoiceAttachment
+                    key={f.blob}
+                    roomKey={roomKey}
+                    file={f}
+                    mine={mine}
+                    color={textColor}
+                    theme={theme}
+                    progress={msg.upload && !msg.upload.failed ? msg.upload.progress[i] : undefined}
+                    onTap={tap}
+                    onLongPress={onLongPress}
+                  />
+                ) : f.mime.startsWith('image/') ? (
                   <ImageAttachment
                     key={f.blob}
                     roomKey={roomKey}
@@ -1368,9 +1526,22 @@ interface StagedFile {
 }
 const MAX_STAGED = 6;
 
+/** The attach menu, top to bottom. */
+const ATTACH_ROWS: {kind: 'camera' | 'video' | 'media' | 'voice' | 'file'; label: string; icon: IconName; color: string}[] = [
+  {kind: 'camera', label: 'Take photo', icon: 'camera', color: '#3b82f6'},
+  {kind: 'video', label: 'Record video', icon: 'video', color: '#ef4444'},
+  {kind: 'media', label: 'Photos & videos', icon: 'image', color: '#8b5cf6'},
+  {kind: 'voice', label: 'Voice note', icon: 'mic', color: '#f59e0b'},
+  {kind: 'file', label: 'File', icon: 'file', color: '#10b981'},
+];
+/** The server's limit on blobs per message (api.go). */
+const MAX_BLOBS = 10;
+
 /** The first image a message carries, to show in a reply to it. */
 function firstImage(m: ChatMessage): FileRef | undefined {
-  return m.content?.t === 'file' ? m.content.files.find(f => f.mime.startsWith('image/')) : undefined;
+  if (m.content?.t !== 'file') return undefined;
+  const f = m.content.files.find(x => x.mime.startsWith('image/') || (isVideo(x) && x.thumb));
+  return f && isVideo(f) ? f.thumb : f;
 }
 
 /**
@@ -1517,7 +1688,7 @@ function FileAttachment({
       // once a location is picked.
       const saved = await saveFileAs(file.name, file.mime, () => {
         setStatus('Downloading…');
-        return fetchFile(roomKey, file);
+        return fetchFile(roomKey, file, frac => setStatus(`Downloading… ${Math.round(frac * 100)}%`));
       });
       setStatus(saved ? `Saved as ${saved.name}` : null);
     } catch (e) {
@@ -1527,7 +1698,7 @@ function FileAttachment({
   return (
     <Pressable
       style={styles.fileChip}
-      disabled={status === 'Downloading…'}
+      disabled={!!status?.startsWith('Downloading')}
       onPress={() => onTap(save)}
       onLongPress={onLongPress}
       delayLongPress={300}>
@@ -1631,6 +1802,7 @@ function makeStyles(theme: Theme) {
     stagedItem: {width: 64, height: 64},
     stagedThumb: {width: 64, height: 64, borderRadius: 6, backgroundColor: theme.surfaceAlt},
     stagedFile: {alignItems: 'center', justifyContent: 'center', padding: 4, gap: 2},
+    stagedVideo: {...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', borderRadius: 6, backgroundColor: 'rgba(0,0,0,0.25)'},
     stagedFileName: {fontSize: 9, color: theme.textMuted, textAlign: 'center'},
     stagedRemove: {
       position: 'absolute',
@@ -1786,6 +1958,10 @@ function makeStyles(theme: Theme) {
     sheetTitle: {paddingHorizontal: 16, paddingVertical: 12, fontSize: 13, fontWeight: '700', color: theme.textMuted},
     menuRow: {paddingHorizontal: 16, paddingVertical: 14},
     menuRowText: {fontSize: 15, fontWeight: '600', color: theme.text},
+    attachRow: {flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10},
+    attachIcon: {width: 32, height: 32, borderRadius: 8, alignItems: 'center', justifyContent: 'center'},
+    preparingRow: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 8, borderTopWidth: 1, borderTopColor: theme.border},
+    preparingText: {fontSize: 12, color: theme.textMuted},
     destructive: {color: theme.danger},
     menuDivider: {height: 1, backgroundColor: theme.border},
     reactRow: {flexDirection: 'row', justifyContent: 'space-around', paddingVertical: 10},

@@ -10,6 +10,9 @@ export interface PickedFile {
   data: Uint8Array;
   w?: number;
   h?: number;
+  dur?: number;
+  wave?: number[];
+  thumb?: {data: Uint8Array; w: number; h: number};
 }
 
 function pick(accept: string, multiple: boolean, capture?: 'environment'): Promise<File[]> {
@@ -75,6 +78,74 @@ export async function pickImages(): Promise<PickedFile[]> {
 
 export async function takePhoto(): Promise<PickedFile[]> {
   return Promise.all((await pick('image/*', false, 'environment')).slice(0, 1).map(read));
+}
+
+/** Rejects if p hasn't settled in time: some browsers never fire a video's events. */
+function within<T>(p: Promise<T>, ms = 8000): Promise<T> {
+  return Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error('timed out')), ms))]);
+}
+
+/** A video, with its length and a poster frame grabbed through a <video> and a canvas. */
+async function readVideo(f: File): Promise<PickedFile> {
+  const file = await read(f);
+  const url = URL.createObjectURL(f);
+  try {
+    const v = document.createElement('video');
+    v.muted = true;
+    v.preload = 'auto';
+    v.src = url;
+    v.playsInline = true;
+    v.load(); // Safari won't start loading an off-page video otherwise
+    await within(
+      new Promise<void>((res, rej) => {
+        v.onloadeddata = () => res();
+        v.onerror = () => rej(new Error('unreadable'));
+      }),
+    );
+    const dur = Number.isFinite(v.duration) ? Math.round(v.duration) : undefined;
+    const at = Math.min(0.5, (v.duration || 1) / 2);
+    if (Math.abs(v.currentTime - at) > 0.01) {
+      await within(
+        new Promise<void>((res, rej) => {
+          v.onseeked = () => res();
+          v.onerror = () => rej(new Error('unreadable'));
+          v.currentTime = at;
+        }),
+      );
+    }
+    const scale = Math.min(1, 480 / Math.max(v.videoWidth, v.videoHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(v.videoWidth * scale);
+    canvas.height = Math.round(v.videoHeight * scale);
+    canvas.getContext('2d')!.drawImage(v, 0, 0, canvas.width, canvas.height);
+    const thumb = {data: await toJpeg(canvas, 0.7), w: canvas.width, h: canvas.height};
+    return {...file, w: thumb.w, h: thumb.h, dur, thumb};
+  } catch {
+    return file; // a format this browser can't decode: it still sends, without a picture
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+const readAny = (f: File) => (f.type.startsWith('video/') ? readVideo(f) : read(f));
+
+/** Phones open the camera in video mode; desktops show the file picker. */
+export async function recordVideo(onCompressing?: () => void): Promise<PickedFile[]> {
+  const files = (await pick('video/*', false, 'environment')).slice(0, 1);
+  if (files.length) onCompressing?.();
+  return Promise.all(files.map(readVideo));
+}
+
+export async function pickMedia(onCompressing?: () => void): Promise<PickedFile[]> {
+  const files = (await pick('image/*,video/*', true)).slice(0, 6);
+  if (files.some(f => f.type.startsWith('video/'))) onCompressing?.();
+  return Promise.all(files.map(readAny));
+}
+
+/** A decrypted video or voice message for <video>/<audio>: an object URL, revoked by release(). */
+export async function playableUri(data: Uint8Array, mime: string): Promise<{uri: string; release: () => void}> {
+  const uri = URL.createObjectURL(new Blob([data as BlobPart], {type: mime}));
+  return {uri, release: () => URL.revokeObjectURL(uri)};
 }
 
 export async function pickFiles(): Promise<PickedFile[]> {

@@ -31,3 +31,7 @@ jest.mock('react-native-incall-manager', () => ({
 }));
 // Safe-area insets (src/App.tsx): the library's own Jest mock.
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
+// Videos and voice messages (src/components/MediaPlayer.tsx, src/voiceNote.ts, src/files.ts).
+jest.mock('react-native-video', () => ({__esModule: true, default: () => null, ViewType: {TEXTURE: 0, SURFACE: 1, SURFACE_SECURE: 2}}));
+jest.mock('react-native-audio-recorder-player', () => ({__esModule: true, default: jest.fn(), AudioEncoderAndroidType: {}, AudioSourceAndroidType: {}, AVEncoderAudioQualityIOSType: {}, AVEncodingOption: {}, OutputFormatAndroidType: {}}));
+jest.mock('react-native-compressor', () => ({Video: {}, Image: {}, createVideoThumbnail: jest.fn()}));

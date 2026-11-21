@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  Camera,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -9,6 +10,7 @@ import {
   File,
   HeadphoneOff,
   Headphones,
+  Image as ImageIcon,
   Info,
   Link,
   Lock,
@@ -17,8 +19,9 @@ import {
   MicOff,
   MoreVertical,
   Plus,
-  Paperclip,
+  Pause,
   PhoneOff,
+  Play,
   RefreshCw,
   Reply,
   Send,
@@ -30,6 +33,7 @@ import {
   Trash2,
   TriangleAlert,
   UserPlus,
+  Video,
   Users,
   Volume2,
   VolumeX,
@@ -72,7 +76,12 @@ export type IconName =
   | 'info'
   | 'warning'
   | 'retry'
-  | 'signal-low';
+  | 'signal-low'
+  | 'camera'
+  | 'video'
+  | 'image'
+  | 'play'
+  | 'pause';
 
 const ICONS: Record<IconName, LucideIcon> = {
   kebab: MoreVertical,
@@ -87,7 +96,7 @@ const ICONS: Record<IconName, LucideIcon> = {
   send: Send,
   reply: Reply,
   react: SmilePlus,
-  attach: Paperclip,
+  attach: Plus,
   file: File,
   download: Download,
   invite: UserPlus,
@@ -108,6 +117,11 @@ const ICONS: Record<IconName, LucideIcon> = {
   warning: TriangleAlert,
   retry: RefreshCw,
   'signal-low': SignalLow,
+  camera: Camera,
+  video: Video,
+  image: ImageIcon,
+  play: Play,
+  pause: Pause,
 };
 
 export function Icon({

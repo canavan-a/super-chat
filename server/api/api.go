@@ -434,6 +434,10 @@ func (a *API) getBlob(c *gin.Context) {
 	}
 	defer f.Close()
 	c.Header("Cache-Control", "private, no-store")
+	// The length lets clients show how far a big download (a video) has got.
+	if fi, err := f.Stat(); err == nil {
+		c.Header("Content-Length", strconv.FormatInt(fi.Size(), 10))
+	}
 	c.Status(http.StatusOK)
 	c.Header("Content-Type", "application/octet-stream")
 	_, _ = io.Copy(c.Writer, f)

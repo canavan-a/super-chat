@@ -86,6 +86,24 @@ export interface FileRef {
   size: number;
   w?: number;
   h?: number;
+  /** A video or voice message's length, in seconds. */
+  dur?: number;
+  /** A voice message's loudness over time, as bars 0–15, drawn without downloading it. */
+  wave?: number[];
+  /** A video's poster frame: a small JPEG in its own blob. */
+  thumb?: FileRef;
+}
+
+export const isVideo = (f: FileRef) => f.mime.startsWith('video/');
+export const isAudio = (f: FileRef) => f.mime.startsWith('audio/');
+
+/** What a file message holds, in a word, for previews and notifications. */
+export function attachmentLabel(files: FileRef[]): string {
+  if (files.length && files.every(f => f.mime.startsWith('image/'))) return '📷 Photo';
+  if (files.length && files.every(isVideo)) return '🎥 Video';
+  if (files.length && files.every(f => f.mime.startsWith('image/') || isVideo(f))) return '📷 Photo & video';
+  if (files.length === 1 && isAudio(files[0]) && files[0].wave) return '🎤 Voice message';
+  return `📎 ${files[0]?.name ?? 'File'}`;
 }
 
 export type ServerKind = 'msg' | 'reaction' | 'receipt' | 'call' | 'edit';

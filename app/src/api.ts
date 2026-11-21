@@ -79,6 +79,8 @@ function xhr(
   by: Signer,
   body?: Uint8Array,
   onProgress?: (fraction: number) => void,
+  /** Bytes expected, for progress when the response doesn't say (an older server). */
+  expected?: number,
 ): Promise<{status: number; data: any}> {
   return new Promise((resolve, reject) => {
     const req = new XMLHttpRequest();
@@ -93,7 +95,10 @@ function xhr(
       // Android's upload counter (React Native's ProgressRequestBody) counts
       // every byte twice, so it runs to 2 × total: halve it there.
       const scale = method === 'PUT' && Platform.OS === 'android' ? 2 : 1;
-      target.onprogress = e => e.lengthComputable && onProgress(Math.min(1, e.loaded / (e.total * scale)));
+      target.onprogress = e => {
+        const total = e.lengthComputable && e.total ? e.total : expected;
+        if (total) onProgress(Math.min(e.lengthComputable ? 1 : 0.99, e.loaded / (total * scale)));
+      };
     }
     req.onload = () => resolve({status: req.status, data: req.response});
     req.timeout = method === 'PUT' ? UPLOAD_TIMEOUT_MS : DOWNLOAD_TIMEOUT_MS;
@@ -121,8 +126,16 @@ export function blobRequest(server: string, room: string, by: Signer, blob: stri
   return {url: server + path, headers: signedHeaders(by, 'GET', path, new Uint8Array())};
 }
 
-export async function downloadBlob(server: string, room: string, by: Signer, blob: string): Promise<Uint8Array> {
-  const res = await xhr(server, 'GET', `/v1/rooms/${room}/blobs/${blob}`, by);
+export async function downloadBlob(
+  server: string,
+  room: string,
+  by: Signer,
+  blob: string,
+  onProgress?: (fraction: number) => void,
+  /** About how big it is (the file's own size; sealing adds a little). */
+  expected?: number,
+): Promise<Uint8Array> {
+  const res = await xhr(server, 'GET', `/v1/rooms/${room}/blobs/${blob}`, by, undefined, onProgress, expected);
   if (res.status !== 200) throw new ApiError(res.status, 'download failed');
   return new Uint8Array(res.data as ArrayBuffer);
 }

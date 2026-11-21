@@ -17,6 +17,12 @@ export interface PickedFile {
   data: Uint8Array;
   w?: number;
   h?: number;
+  /** Video or voice: seconds long. */
+  dur?: number;
+  /** Voice: loudness bars, 0–15. */
+  wave?: number[];
+  /** Video: its poster frame, a small JPEG. */
+  thumb?: {data: Uint8Array; w: number; h: number};
 }
 
 async function readAndDelete(path: string): Promise<Uint8Array> {
@@ -209,6 +215,109 @@ async function readPhotos(res: ImagePickerResponse, fallbackName = 'image.jpg'):
     if (a.uri?.startsWith('file://')) RNFS.unlink(a.uri.replace('file://', '')).catch(() => {});
   }
   return out;
+}
+
+// ---- videos ----
+//
+// Recorded or picked videos are re-encoded (react-native-compressor: H.264
+// MP4, about 720p) so a minute or so fits under the server's blob limit, and
+// get a poster frame to show in the chat before anyone downloads the video.
+
+/** Longest video the camera records, in seconds. */
+const VIDEO_SECONDS = 120;
+
+const pathOf = (uri: string) => decodeURI(uri.replace('file://', ''));
+
+async function readVideo(uri: string, name: string, dur?: number): Promise<PickedFile> {
+  const {Video, Image: ImageCompressor, createVideoThumbnail} = await import('react-native-compressor');
+  const temps = [uri];
+  try {
+    const out = await Video.compress(uri, {compressionMethod: 'auto', maxSize: 1280});
+    temps.push(out);
+    let thumb: PickedFile['thumb'];
+    try {
+      const t = await createVideoThumbnail(out);
+      temps.push(t.path);
+      const small = await ImageCompressor.compress(t.path, {compressionMethod: 'manual', maxWidth: 480, maxHeight: 480, quality: 0.7, output: 'jpg'});
+      temps.push(small);
+      const scale = Math.min(1, 480 / Math.max(t.width, t.height));
+      thumb = {data: await b64DecodeAsync(await RNFS.readFile(pathOf(small), 'base64')), w: Math.round(t.width * scale), h: Math.round(t.height * scale)};
+    } catch {
+      thumb = undefined; // it still plays; the bubble just has no picture
+    }
+    return {
+      name: name.replace(/\.[^.]+$/, '') + '.mp4',
+      mime: 'video/mp4',
+      data: await b64DecodeAsync(await RNFS.readFile(pathOf(out), 'base64')),
+      w: thumb?.w,
+      h: thumb?.h,
+      dur: dur ? Math.round(dur) : undefined,
+      thumb,
+    };
+  } finally {
+    for (const t of temps) if (t.startsWith('file://') || t.startsWith('/')) RNFS.unlink(pathOf(t)).catch(() => {});
+  }
+}
+
+/** Opens the camera to record one video, which isn't saved to the gallery. Empty if cancelled. */
+/** onCompressing: called as a video starts re-encoding (the slow part), not while the camera is open. */
+export async function recordVideo(onCompressing?: () => void): Promise<PickedFile[]> {
+  const res = await launchCamera({mediaType: 'video', videoQuality: 'high', durationLimit: VIDEO_SECONDS, saveToPhotos: false, formatAsMp4: true});
+  if (res.errorCode === 'camera_unavailable') throw new Error('No camera available.');
+  if (res.errorCode === 'permission') throw new Error('Super Chat needs camera access: allow it in Settings.');
+  if (res.errorMessage) throw new Error(res.errorMessage);
+  const a = res.assets?.[0];
+  if (res.didCancel || !a?.uri) return [];
+  onCompressing?.();
+  return [await readVideo(a.uri, a.fileName ?? 'video.mp4', a.duration)];
+}
+
+/** Photos and videos from the gallery: photos re-encoded as before, videos as above. */
+export async function pickMedia(onCompressing?: () => void): Promise<PickedFile[]> {
+  const res = await launchImageLibrary({...PHOTO_OPTIONS, mediaType: 'mixed', includeBase64: false, selectionLimit: 6, formatAsMp4: true});
+  // Errors first: a refused permission comes back with no assets too.
+  if (res.errorCode === 'permission') throw new Error('Super Chat needs photo access: allow it in Settings.');
+  if (res.errorMessage || res.errorCode) throw new Error(res.errorMessage || "Couldn't open the gallery.");
+  if (res.didCancel || !res.assets) return [];
+  const out: PickedFile[] = [];
+  for (const a of res.assets) {
+    if (!a.uri) continue;
+    if (a.type?.startsWith('video/')) {
+      onCompressing?.();
+      out.push(await readVideo(a.uri, a.fileName ?? 'video.mp4', a.duration));
+    } else {
+      out.push({
+        name: a.fileName ?? 'image.jpg',
+        mime: a.type ?? 'image/jpeg',
+        data: a.uri.startsWith('file://') ? await readAndDelete(pathOf(a.uri)) : await b64DecodeAsync(await RNFS.readFile(a.uri, 'base64')),
+        w: a.width,
+        h: a.height,
+      });
+    }
+  }
+  return out;
+}
+
+// ---- playing ----
+
+const playDir = () => `${RNFS.CachesDirectoryPath}/play`;
+// Anything left from last time (the app was killed mid-video) goes before the first new one.
+let playDirReady: Promise<void> | null = null;
+
+/**
+ * A video or voice message, decrypted, as something the player can open: a
+ * file in the cache (players stream from a file, not from memory), deleted
+ * again by release() and on next launch.
+ */
+export async function playableUri(data: Uint8Array, mime: string): Promise<{uri: string; release: () => void}> {
+  const ext = mime.includes('mp4') ? (mime.startsWith('audio/') ? 'm4a' : 'mp4') : (mime.split('/')[1] ?? 'bin').replace(/[^a-z0-9]/g, '');
+  playDirReady ??= RNFS.unlink(playDir())
+    .catch(() => {})
+    .then(() => RNFS.mkdir(playDir()));
+  await playDirReady;
+  const path = `${playDir()}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+  await RNFS.writeFile(path, await b64EncodeAsync(data), 'base64');
+  return {uri: `file://${path}`, release: () => RNFS.unlink(path).catch(() => {})};
 }
 
 export async function pickFiles(): Promise<PickedFile[]> {

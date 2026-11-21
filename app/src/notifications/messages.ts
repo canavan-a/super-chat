@@ -5,7 +5,7 @@
 import notifee, {AndroidStyle} from '@notifee/react-native';
 import {NativeModules} from 'react-native';
 
-import {fingerprint} from '../crypto';
+import {attachmentLabel, fingerprint} from '../crypto';
 import {isSideload} from '../distribution';
 import {rgbToHex, themeAccent} from '../logo/logoTheme';
 import {mentionsToNames} from '../mentions';
@@ -62,7 +62,7 @@ export async function notifyMessage(room: Room, msg: ChatMessage): Promise<void>
   const line: Line = {
     sender: names[msg.sender] ?? fingerprint(msg.sender),
     text: censor(
-      c?.t === 'text' ? body(c.body) : c?.t === 'file' ? body(c.body ?? '') || '📎 Attachment' : c?.t === 'ice' ? '🔊 Shared a voice server' : '🔒 Message',
+      c?.t === 'text' ? body(c.body) : c?.t === 'file' ? body(c.body ?? '') || attachmentLabel(c.files) : c?.t === 'ice' ? '🔊 Shared a voice server' : '🔒 Message',
     ).slice(0, 300),
     at: msg.createdAt,
   };
