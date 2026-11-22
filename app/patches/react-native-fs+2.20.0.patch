@@ -1,0 +1,14 @@
+diff --git a/node_modules/react-native-fs/android/src/main/java/com/rnfs/RNFSManager.java b/node_modules/react-native-fs/android/src/main/java/com/rnfs/RNFSManager.java
+index 351ac06..a4b95ac 100755
+--- a/node_modules/react-native-fs/android/src/main/java/com/rnfs/RNFSManager.java
++++ b/node_modules/react-native-fs/android/src/main/java/com/rnfs/RNFSManager.java
+@@ -975,7 +975,8 @@ public class RNFSManager extends ReactContextBaseJavaModule {
+       return;
+     }
+ 
+-    promise.reject(null, ex.getMessage());
++    // RN 0.81 (Kotlin PromiseImpl) crashes the app on a null code.
++    promise.reject("EUNSPECIFIED", ex.getMessage());
+   }
+ 
+   private void rejectFileNotFound(Promise promise, String filepath) {

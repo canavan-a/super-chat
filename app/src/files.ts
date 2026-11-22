@@ -8,6 +8,7 @@ import RNFS from 'react-native-fs';
 import {NativeModules} from 'react-native';
 import {base64} from '@scure/base';
 import {b64DecodeAsync, b64EncodeAsync} from './crypto/chunked';
+import {readFileChunked, writeFileChunked} from './chunkedFs';
 
 import {unutf8, utf8} from './crypto';
 
@@ -27,7 +28,7 @@ export interface PickedFile {
 
 async function readAndDelete(path: string): Promise<Uint8Array> {
   try {
-    return await b64DecodeAsync(await RNFS.readFile(path, 'base64'));
+    return await readFileChunked(path);
   } finally {
     RNFS.unlink(path).catch(() => {});
   }
@@ -248,7 +249,7 @@ async function readVideo(uri: string, name: string, dur?: number): Promise<Picke
     return {
       name: name.replace(/\.[^.]+$/, '') + '.mp4',
       mime: 'video/mp4',
-      data: await b64DecodeAsync(await RNFS.readFile(pathOf(out), 'base64')),
+      data: await readFileChunked(pathOf(out)),
       w: thumb?.w,
       h: thumb?.h,
       dur: dur ? Math.round(dur) : undefined,
@@ -311,12 +312,13 @@ let playDirReady: Promise<void> | null = null;
  */
 export async function playableUri(data: Uint8Array, mime: string): Promise<{uri: string; release: () => void}> {
   const ext = mime.includes('mp4') ? (mime.startsWith('audio/') ? 'm4a' : 'mp4') : (mime.split('/')[1] ?? 'bin').replace(/[^a-z0-9]/g, '');
-  playDirReady ??= RNFS.unlink(playDir())
+  playDirReady ??= RNFS.exists(playDir())
+    .then(there => (there ? RNFS.unlink(playDir()) : undefined))
     .catch(() => {})
     .then(() => RNFS.mkdir(playDir()));
   await playDirReady;
   const path = `${playDir()}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-  await RNFS.writeFile(path, await b64EncodeAsync(data), 'base64');
+  await writeFileChunked(path, data);
   return {uri: `file://${path}`, release: () => RNFS.unlink(path).catch(() => {})};
 }
 

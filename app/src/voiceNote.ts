@@ -11,7 +11,7 @@ import AudioRecorderPlayer, {
 } from 'react-native-audio-recorder-player';
 import RNFS from 'react-native-fs';
 
-import {b64DecodeAsync} from './crypto/chunked';
+import {readFileChunked} from './chunkedFs';
 import type {PickedFile} from './files';
 import {dbToLevel, toBars} from './voiceWave';
 
@@ -85,7 +85,7 @@ export async function startVoiceNote(onLevel: (level: number, seconds: number) =
       const path = await finish();
       try {
         if (seconds < 0.7) return null;
-        const data = await b64DecodeAsync(await RNFS.readFile(path, 'base64'));
+        const data = await readFileChunked(path);
         return {name: 'Voice message.m4a', mime: 'audio/mp4', data, dur: Math.round(seconds), wave: toBars(levels)};
       } finally {
         RNFS.unlink(path).catch(() => {});

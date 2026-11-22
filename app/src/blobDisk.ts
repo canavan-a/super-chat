@@ -11,7 +11,7 @@
 // kept decrypted, written once by native code (BlobModule), so a cold start
 // shows them straight from a file:// URI with no crypto or base64 in JS.
 import RNFS from 'react-native-fs';
-import {b64DecodeAsync, b64EncodeAsync} from './crypto/chunked';
+import {readFileChunked, writeFileChunked} from './chunkedFs';
 
 const DIR = `${RNFS.DocumentDirectoryPath}/blobs`;
 /** Total size the cache is trimmed back to. */
@@ -28,7 +28,7 @@ export async function getSealed(blob: string): Promise<Uint8Array | null> {
   try {
     const p = pathOf(blob);
     if (!(await RNFS.exists(p))) return null;
-    const data = await b64DecodeAsync(await RNFS.readFile(p, 'base64'));
+    const data = await readFileChunked(p);
     // Mark it recently used, for trimming.
     RNFS.touch(p, new Date(), new Date()).catch(() => {});
     return data;
@@ -41,7 +41,7 @@ export async function getSealed(blob: string): Promise<Uint8Array | null> {
 export async function putSealed(blob: string, sealed: Uint8Array): Promise<void> {
   try {
     await ensureDir();
-    await RNFS.writeFile(pathOf(blob), await b64EncodeAsync(sealed), 'base64');
+    await writeFileChunked(pathOf(blob), sealed);
     trimSoon();
   } catch {
     // not cached; it'll be downloaded again next time
