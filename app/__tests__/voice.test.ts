@@ -507,6 +507,46 @@ describe('voice engine', () => {
     expect(b.engine.getView().muted).toBe(true);
   });
 
+  it('turns one person down or mutes them for us only', async () => {
+    const net = network();
+    const a = net.add('A');
+    const b = net.add('B');
+    await join(a);
+    jest.advanceTimersByTime(FIND_MS);
+    await join(b);
+    await flush();
+    connectAll(a, b);
+    const remote = Object.assign(new FakeTrack(), {_setVolume: jest.fn()});
+    b.pcs[0].fire('track', {
+      streams: [{getTracks: () => [remote], getAudioTracks: () => [remote]}],
+    });
+    const peer = b.engine.getView().peers[0].member;
+
+    b.engine.setPeerVolume(peer, 0.4);
+    expect(remote._setVolume).toHaveBeenLastCalledWith(0.4);
+    expect(b.engine.getView().peers[0]).toMatchObject({
+      volume: 0.4,
+      localMuted: false,
+    });
+    expect(b.engine.remoteStreams()[0].volume).toBe(0.4);
+
+    b.engine.setPeerMuted(peer, true);
+    expect(remote.enabled).toBe(false);
+    expect(b.engine.getView().peers[0].localMuted).toBe(true);
+    // Nobody else is told.
+    expect(a.engine.getView().peers[0]).toMatchObject({muted: false, deaf: false});
+
+    // Sound on again after sound off leaves them muted for us.
+    b.engine.setDeafened(true);
+    b.engine.setDeafened(false);
+    expect(remote.enabled).toBe(false);
+    b.engine.setPeerMuted(peer, false);
+    expect(remote.enabled).toBe(true);
+
+    b.engine.setPeerVolume(peer, 5);
+    expect(b.engine.peerAudio(peer).volume).toBe(1);
+  });
+
   it('restarts ICE from the offerer, then explains a connection that never worked', async () => {
     const net = network();
     const a = net.add('A');

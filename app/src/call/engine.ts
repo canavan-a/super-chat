@@ -72,6 +72,16 @@ export interface PeerView {
   deaf: boolean;
   level: number;
   diagnosis: Diagnosis | null;
+  /** How loud this person plays for us, 0–1 (set here only, never sent). */
+  volume: number;
+  /** We muted this person for ourselves only. */
+  localMuted: boolean;
+}
+
+/** This device's own volume / mute for one person, kept per member. */
+export interface PeerAudioPref {
+  volume: number;
+  muted: boolean;
 }
 
 export type VoiceErrorKind = 'unsupported' | 'mic-denied' | 'full' | 'timeout';
@@ -132,6 +142,8 @@ export const IDLE_VIEW: VoiceView = {
 export interface TrackLike {
   enabled: boolean;
   stop(): void;
+  /** react-native-webrtc's per-track playback gain (native only). */
+  _setVolume?(volume: number): void;
 }
 export interface StreamLike {
   getTracks(): TrackLike[];
@@ -237,6 +249,11 @@ export function createVoiceEngine(deps: VoiceDeps) {
   let view: VoiceView = IDLE_VIEW;
   const listeners = new Set<() => void>();
   let unsubs: (() => void)[] = [];
+  // Per-person volume / mute, by member: kept across reconnects and rejoins
+  // for as long as the app runs.
+  const prefs = new Map<string, PeerAudioPref>();
+  const prefOf = (member: string): PeerAudioPref =>
+    prefs.get(member) ?? {volume: 1, muted: false};
 
   const sinceLive = {at: 0};
 
@@ -293,6 +310,8 @@ export function createVoiceEngine(deps: VoiceDeps) {
       deaf: p.deaf,
       level: p.quality.level,
       diagnosis: p.diagnosis,
+      volume: prefOf(p.member).volume,
+      localMuted: prefOf(p.member).muted,
     }));
     const struggling = peers.filter(
       p => p.state === 'reconnecting' || p.state === 'stalled',
@@ -681,10 +700,27 @@ export function createVoiceEngine(deps: VoiceDeps) {
       .forEach(t => (t.enabled = !session!.muted));
   }
 
+  /** Sound off, and each person's own volume / mute, onto their audio. */
   function applyDeafen() {
     if (!session) return;
-    for (const p of session.peers.values())
-      p.stream?.getAudioTracks().forEach(t => (t.enabled = !session!.deafened));
+    for (const p of session.peers.values()) {
+      const pref = prefOf(p.member);
+      p.stream?.getAudioTracks().forEach(t => {
+        t.enabled = !session!.deafened && !pref.muted;
+        try {
+          t._setVolume?.(pref.volume);
+        } catch {}
+      });
+    }
+  }
+
+  function setPref(member: string, patch: Partial<PeerAudioPref>) {
+    const next = {...prefOf(member), ...patch};
+    next.volume = Math.min(1, Math.max(0, next.volume));
+    if (next.volume === 1 && !next.muted) prefs.delete(member);
+    else prefs.set(member, next);
+    applyDeafen();
+    notify();
   }
 
   // ---- phases ----
@@ -1067,6 +1103,17 @@ export function createVoiceEngine(deps: VoiceDeps) {
       beat();
       notify();
     },
+    /** Our own playback volume for one person (0–1); nobody else hears a change. */
+    setPeerVolume(member: string, volume: number) {
+      setPref(member, {volume});
+    },
+    /** Mute one person for ourselves only. */
+    setPeerMuted(member: string, muted: boolean) {
+      setPref(member, {muted});
+    },
+    peerAudio(member: string): PeerAudioPref {
+      return prefOf(member);
+    },
     setSpeakerOn(on: boolean) {
       if (!session || view.route === 'headset') return;
       deps.setSpeaker(on);
@@ -1093,11 +1140,15 @@ export function createVoiceEngine(deps: VoiceDeps) {
         if (p.offerer && p.conn !== 'connected') restartNow(p);
     },
     /** The remote audio streams, for RemoteAudio.web.tsx. */
-    remoteStreams(): {id: string; stream: StreamLike}[] {
+    remoteStreams(): {id: string; stream: StreamLike; volume: number}[] {
       if (!session) return [];
       return [...session.peers.values()]
         .filter(p => p.stream)
-        .map(p => ({id: p.id, stream: p.stream!}));
+        .map(p => ({
+          id: p.id,
+          stream: p.stream!,
+          volume: prefOf(p.member).volume,
+        }));
     },
   };
 }

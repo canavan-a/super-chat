@@ -27,6 +27,7 @@ import {Icon, IconName} from '../components/Icon';
 import {Overlay} from '../components/Overlay';
 import {AMBER} from '../components/VoiceBar';
 import {VoiceControls} from '../components/VoiceControls';
+import {VolumeSlider} from '../components/VolumeSlider';
 import {fingerprint} from '../crypto';
 import type {Route} from '../routes';
 import {chatTitle, getRoom, namesOf, useStore} from '../store';
@@ -64,6 +65,8 @@ export function VoiceScreen({
   const nameOf = (m: string) => names[m] || fingerprint(m);
   const mine = v.roomKey === roomKey;
   const [sheet, setSheet] = useState<TileData | null>(null);
+  // The person whose volume / mute (for us only) is being changed.
+  const [adjust, setAdjust] = useState<TileData | null>(null);
 
   useEffect(() => {
     onHeaderChange({
@@ -271,7 +274,13 @@ export function VoiceScreen({
           You're the only one here.
         </Text>
       ) : null}
-      <Grid tiles={tiles} roomKey={roomKey} theme={theme} onInfo={setSheet} />
+      <Grid
+        tiles={tiles}
+        roomKey={roomKey}
+        theme={theme}
+        onInfo={setSheet}
+        onAdjust={setAdjust}
+      />
 
       {noticeVisible ? (
         <View style={styles.toast}>
@@ -351,7 +360,78 @@ export function VoiceScreen({
           </View>
         ) : null}
       </Overlay>
+
+      <PeerAudioSheet
+        tile={adjust}
+        roomKey={roomKey}
+        theme={theme}
+        onClose={() => setAdjust(null)}
+      />
     </View>
+  );
+}
+
+// ---- one person's volume / mute, for us only ----
+
+function PeerAudioSheet({
+  tile,
+  roomKey,
+  theme,
+  onClose,
+}: {
+  tile: TileData | null;
+  roomKey: string;
+  theme: Theme;
+  onClose: () => void;
+}) {
+  const styles = useMemo(() => makeStyles(theme), [theme]);
+  useVoice(); // re-render as the volume / mute changes
+  const pref = tile ? voice.peerAudio(tile.member) : null;
+  return (
+    <Overlay visible={!!tile} onClose={onClose} style={styles.dialogLayer}>
+      {tile && pref ? (
+        <View style={styles.dialog}>
+          <View style={styles.adjustHead}>
+            <Avatar
+              roomKey={roomKey}
+              member={tile.member}
+              name={tile.name}
+              size={56}
+            />
+            <Text style={styles.dialogTitle} numberOfLines={1}>
+              {tile.name}
+            </Text>
+          </View>
+          <View style={styles.adjustRow}>
+            <Text style={styles.adjustLabel}>Volume</Text>
+            <Text style={styles.adjustLabel}>
+              {pref.muted ? 'Muted' : `${Math.round(pref.volume * 100)}%`}
+            </Text>
+          </View>
+          <VolumeSlider
+            value={pref.volume}
+            theme={theme}
+            dimmed={pref.muted}
+            label={`Volume for ${tile.name}`}
+            onChange={x => {
+              voice.setPeerVolume(tile.member, x);
+              if (pref.muted) voice.setPeerMuted(tile.member, false);
+            }}
+          />
+          <Text style={styles.dialogBody}>
+            Only you hear this change. {tile.name} isn't told.
+          </Text>
+          <View style={styles.dialogButtons}>
+            <DialogBtn
+              theme={theme}
+              label={pref.muted ? 'Unmute' : 'Mute for me'}
+              onPress={() => voice.setPeerMuted(tile.member, !pref.muted)}
+            />
+            <DialogBtn theme={theme} label="Done" primary onPress={onClose} />
+          </View>
+        </View>
+      ) : null}
+    </Overlay>
   );
 }
 
@@ -362,11 +442,14 @@ function Grid({
   roomKey,
   theme,
   onInfo,
+  onAdjust,
 }: {
   tiles: TileData[];
   roomKey: string;
   theme: Theme;
   onInfo: (t: TileData) => void;
+  /** Only while we're in this voice room: tap someone to change their volume. */
+  onAdjust?: (t: TileData) => void;
 }) {
   const [box, setBox] = useState({w: 0, h: 0});
   const styles = useMemo(() => makeStyles(theme), [theme]);
@@ -403,6 +486,7 @@ function Grid({
               roomKey={roomKey}
               theme={theme}
               onInfo={onInfo}
+              onAdjust={onAdjust}
             />
           ))}
         </View>
@@ -424,14 +508,18 @@ function Tile({
   roomKey,
   theme,
   onInfo,
+  onAdjust,
 }: {
   t: TileData;
   size: number;
   roomKey: string;
   theme: Theme;
   onInfo: (t: TileData) => void;
+  onAdjust?: (t: TileData) => void;
 }) {
   const styles = useMemo(() => makeStyles(theme), [theme]);
+  const adjustable = !!onAdjust && !t.you;
+  const pref = adjustable ? voice.peerAudio(t.member) : null;
   const dim =
     t.state === 'connecting' ||
     t.state === 'stalled' ||
@@ -442,11 +530,14 @@ function Tile({
   const overlay = STATE_TEXT[t.state];
   return (
     <Pressable
-      disabled={t.state !== 'failed'}
-      onPress={() => onInfo(t)}
+      disabled={t.state !== 'failed' && !adjustable}
+      onPress={() => (t.state === 'failed' ? onInfo(t) : onAdjust?.(t))}
+      accessibilityHint={adjustable ? 'Change their volume for you' : undefined}
       accessibilityLabel={`${t.name}${t.muted ? ', muted' : ''}${
         t.deaf ? ', sound off' : ''
-      }${overlay ? `, ${overlay}` : ''}`}
+      }${pref?.muted ? ', muted for you' : ''}${
+        overlay ? `, ${overlay}` : ''
+      }`}
       style={[
         styles.tile,
         {width: size, height: size},
@@ -483,6 +574,13 @@ function Tile({
         </Text>
         {t.muted ? <Badge icon="mic-off" color={theme.danger} /> : null}
         {t.deaf ? <Badge icon="headphone-off" color={theme.danger} /> : null}
+        {pref?.muted ? (
+          <Badge icon="volume-x" color={theme.textMuted} />
+        ) : pref && pref.volume < 1 ? (
+          <Text style={styles.tileVolume}>
+            {Math.round(pref.volume * 100)}%
+          </Text>
+        ) : null}
         {t.state === 'weak' ? <Badge icon="signal-low" color={AMBER} /> : null}
       </View>
     </Pressable>
@@ -751,6 +849,10 @@ function makeStyles(theme: Theme) {
       gap: 4,
     },
     tileName: {flex: 1, color: theme.text, fontSize: 12, fontWeight: '600'},
+    tileVolume: {color: theme.textMuted, fontSize: 11, fontWeight: '600'},
+    adjustHead: {alignItems: 'center', gap: 8},
+    adjustRow: {flexDirection: 'row', justifyContent: 'space-between'},
+    adjustLabel: {color: theme.text, fontSize: 13, fontWeight: '600'},
     controls: {
       paddingTop: 16,
       paddingBottom: 34,

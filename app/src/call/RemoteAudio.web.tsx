@@ -9,9 +9,11 @@ import {useVoice, voice} from './voice';
 function PeerAudio({
   stream,
   sinkId,
+  volume,
 }: {
   stream: MediaStream;
   sinkId: string | null;
+  volume: number;
 }) {
   const ref = useRef<HTMLAudioElement | null>(null);
   useEffect(() => {
@@ -22,6 +24,9 @@ function PeerAudio({
       .then(() => voice.setAudioBlocked(false))
       .catch(() => voice.setAudioBlocked(true));
   }, [stream]);
+  useEffect(() => {
+    if (ref.current) ref.current.volume = volume;
+  }, [volume]);
   useEffect(() => {
     const el = ref.current as any;
     if (el && sinkId && typeof el.setSinkId === 'function')
@@ -60,6 +65,7 @@ export function RemoteAudio(): React.JSX.Element | null {
           key={s.id}
           stream={s.stream as unknown as MediaStream}
           sinkId={v.outputDevice}
+          volume={s.volume}
         />
       ))}
     </>
