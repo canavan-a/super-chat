@@ -490,3 +490,14 @@ func (b *Bot) safely(what string, fn func() error) {
 		b.log.Warn("a handler failed", "handler", what, "err", err)
 	}
 }
+
+// Send posts a message in a room the bot is in, outside of any handler (say,
+// "now playing" when a queued song starts).
+func (b *Bot) Send(ctx context.Context, roomID, text string) error {
+	r := b.room(roomID)
+	if r == nil {
+		return errors.New("the bot isn't in that room")
+	}
+	_, err := r.send(ctx, crypto.Content{T: crypto.TypeText, Body: text}, nil)
+	return err
+}

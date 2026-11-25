@@ -865,3 +865,29 @@ func (p *person) keyFor(epoch int64) []byte {
 	}
 	return p.keys[epoch]
 }
+
+func TestSend(t *testing.T) {
+	srv := startServer(t)
+	alice := newPerson(t, srv, "Alice")
+	alice.createRoom("Den")
+	r := startBot(t, initBot(t, "Emma"))
+	room, err := r.b.Join(context.Background(), alice.invite())
+	if err != nil {
+		t.Fatal(err)
+	}
+	me := botID(t, room, alice.me.ID)
+	if err := r.b.Send(context.Background(), room.ID, "now playing: something"); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the message", func() bool {
+		for _, m := range alice.messages() {
+			if m.sender == me && m.c.Body == "now playing: something" {
+				return true
+			}
+		}
+		return false
+	})
+	if err := r.b.Send(context.Background(), "nope", "x"); err == nil {
+		t.Fatal("sent to a room the bot isn't in")
+	}
+}

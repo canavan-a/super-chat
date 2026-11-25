@@ -262,7 +262,19 @@ type Playback struct {
 	done    chan struct{}
 	once    sync.Once
 	err     error
+	paused  atomic.Bool
 }
+
+// Pause holds the playback where it is; the bot sends silence meanwhile
+// (the stream never stops, so nobody's app shows it buffering). Resume
+// carries on from the same place.
+func (p *Playback) Pause() { p.paused.Store(true) }
+
+// Resume carries on after Pause.
+func (p *Playback) Resume() { p.paused.Store(false) }
+
+// Paused reports whether the playback is paused.
+func (p *Playback) Paused() bool { return p.paused.Load() }
 
 // Done is closed once the source has played to its end, was stopped or
 // replaced, or the call ended.
@@ -309,7 +321,7 @@ func (c *Call) audioLoop() {
 	next := time.Now()
 	for {
 		pkt, dur := audio.Silence, audio.SilenceDuration
-		if pb := c.playing.Load(); pb != nil {
+		if pb := c.playing.Load(); pb != nil && !pb.paused.Load() {
 			select {
 			case f, ok := <-pb.packets:
 				if !ok {

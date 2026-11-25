@@ -25,24 +25,43 @@ export interface Mentionable {
  * who was chosen from the list, which settles two members with one name.
  */
 export function encodeMentions(text: string, members: Mentionable[], picked: Record<string, string> = {}): string {
+  return splitTypedMentions(text, members, picked)
+    .map(s => (s.id ? `<@${s.id}>` : s.text))
+    .join('');
+}
+
+/**
+ * The typed text in pieces: plain text, and each `@Name` that will be sent as
+ * a mention (with who). Joined back up, the pieces are the text. The composer
+ * shows the mentions as pills; encodeMentions turns them into tokens.
+ */
+export function splitTypedMentions(
+  text: string,
+  members: Mentionable[],
+  picked: Record<string, string> = {},
+): {text: string; id?: string}[] {
   const byName = new Map<string, string>();
   for (const m of members) if (m.name && !byName.has(m.name)) byName.set(m.name, m.id);
   for (const [name, id] of Object.entries(picked)) if (members.some(m => m.id === id)) byName.set(name, id);
   const names = [...byName.keys()].sort((a, b) => b.length - a.length);
-  if (!names.length || !text.includes('@')) return text;
-  let out = '';
+  if (!names.length || !text.includes('@')) return text ? [{text}] : [];
+  const out: {text: string; id?: string}[] = [];
+  let plain = '';
   let i = 0;
   while (i < text.length) {
     if (text[i] === '@' && (i === 0 || !isWordChar(text[i - 1]))) {
       const name = names.find(n => text.startsWith(n, i + 1) && !isWordChar(text[i + 1 + n.length] ?? ''));
       if (name) {
-        out += `<@${byName.get(name)}>`;
+        if (plain) out.push({text: plain});
+        plain = '';
+        out.push({text: '@' + name, id: byName.get(name)});
         i += 1 + name.length;
         continue;
       }
     }
-    out += text[i++];
+    plain += text[i++];
   }
+  if (plain) out.push({text: plain});
   return out;
 }
 

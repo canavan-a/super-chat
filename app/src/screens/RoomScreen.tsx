@@ -37,7 +37,8 @@ import {platformConfirm} from '../platformConfirm';
 import {openMail, reportMailto} from '../privacy/contact';
 import {QUICK_REACTIONS, settingsStore} from '../settings';
 import {Route} from '../routes';
-import {encodeMentions, matchMembers, mentionQuery, mentionsToNames} from '../mentions';
+import {encodeMentions, matchMembers, mentionQuery, mentionsToNames, splitTypedMentions} from '../mentions';
+import {MentionInput} from '../components/MentionInput';
 import {
   bodyOf,
   chatPicture,
@@ -243,6 +244,8 @@ export function RoomScreen({
     draftBeforeEdit.current = '';
   };
 
+  // The @Names that will go out as mentions, shown as pills while typing.
+  const draftSpans = splitTypedMentions(draft, mentionable, picked.current);
   // Typing "@" lists the members (but me) whose names match what follows it.
   const mq = mentionQuery(draft, cursor);
   const mentionMatches = mq ? matchMembers(mentionable.filter(m => m.id !== meId), mq.query) : [];
@@ -536,9 +539,11 @@ export function RoomScreen({
             <Icon name="attach" size={18} color={theme.text} />
           </Pressable>
         )}
-        <TextInput
+        <MentionInput
           style={styles.composerInput}
           value={draft}
+          spans={draftSpans}
+          accent={theme.primary}
           onChangeText={onChangeDraft}
           onSelectionChange={e => setCursor(e.nativeEvent.selection.end)}
           placeholder={editing ? 'Edit message' : staged.length ? 'Add a caption' : 'Message'}

@@ -677,3 +677,52 @@ func TestPlaybackStall(t *testing.T) {
 		}
 	}
 }
+
+// Paused: only silence goes out, nothing of the clip is lost, and Resume
+// carries on where it stopped.
+func TestPlaybackPause(t *testing.T) {
+	srv := startServer(t)
+	alice := newPerson(t, srv, "Alice")
+	alice.createRoom("Den")
+	b, _ := startVoiceBot(t, initBot(t, "Emma"))
+	room, err := b.Join(context.Background(), alice.invite())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ap := newPhone(t, alice)
+	ap.join()
+	eventually(t, "presence", func() bool { return len(b.Voice.Presence(room.ID)) == 1 })
+	call, err := b.Voice.Join(context.Background(), room.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "alice to connect", func() bool { return len(call.Peers()) == 1 })
+	var want [][]byte
+	for i := 0; i < 40; i++ {
+		want = append(want, []byte{0xFC, 'P', byte(i)})
+	}
+	ap.drain()
+	pb := call.Play(audio.Packets(want))
+	time.Sleep(200 * time.Millisecond)
+	pb.Pause()
+	if !pb.Paused() {
+		t.Fatal("not paused")
+	}
+	time.Sleep(100 * time.Millisecond) // what was already in flight
+	ap.drain()
+	for _, p := range ap.receive(700 * time.Millisecond) {
+		if !isSilence(p) {
+			t.Fatalf("clip audio while paused: % x", p)
+		}
+	}
+	select {
+	case <-pb.Done():
+		t.Fatal("a paused playback ended")
+	default:
+	}
+	pb.Resume()
+	<-pb.Done()
+	if pb.Err() != nil {
+		t.Fatal(pb.Err())
+	}
+}

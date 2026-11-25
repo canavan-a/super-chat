@@ -1,7 +1,7 @@
 // Chat-bubble markdown, the same renderer super-badger uses for replies:
 // paragraphs with links, and headings.
 import React, {useMemo} from 'react';
-import {Linking, StyleSheet, Text} from 'react-native';
+import {Linking, Platform, StyleSheet, Text, View} from 'react-native';
 
 import {InlineRun, parseMarkdown} from '../markdown';
 import {censor, useFilterWords} from '../moderation/wordFilter';
@@ -69,9 +69,10 @@ function InlineRuns({
     <>
       {runs.map((run, j) =>
         run.mention ? (
-          <Text key={j} style={[styles.mention, {backgroundColor: tint(color, run.mention === meId ? 0.38 : 0.18)}]}>
-            {run.value}
-          </Text>
+          // A pill set into the line: a View, since text inside text can't round its corners.
+          <View key={j} style={[styles.pill, {backgroundColor: tint(color, run.mention === meId ? 0.38 : 0.2)}]}>
+            <Text style={[styles.pillText, {color}]}>{run.value}</Text>
+          </View>
         ) : run.url ? (
           <Text
             key={j}
@@ -95,11 +96,17 @@ const styles = StyleSheet.create({
   heading: {marginTop: 2, marginBottom: 2},
   // The bubble's own text colour, which reads on both sides of the chat.
   link: {textDecorationLine: 'underline'},
-  mention: {fontWeight: '700', borderRadius: 4},
+  pill: {
+    borderRadius: 9,
+    paddingHorizontal: 6,
+    // iOS and Android sit a view in text on the baseline; down to where the words sit.
+    ...(Platform.OS === 'web' ? null : {transform: [{translateY: 3}]}),
+  },
+  pillText: {fontSize: 13, lineHeight: 17, fontWeight: '700'},
 });
 
 /** The bubble's text colour, see-through: a highlight that reads on either side of the chat. */
-function tint(color: string, alpha: number): string {
+export function tint(color: string, alpha: number): string {
   const hex = /^#([0-9a-f]{6})$/i.exec(color)?.[1];
   if (!hex) return `rgba(127,127,127,${alpha})`;
   const [r, g, b] = [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16));
