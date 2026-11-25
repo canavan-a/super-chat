@@ -32,13 +32,15 @@ shared/                    ONE module: github.com/canavan-a/super-chat/shared
   proto/                   DONE, moved from server/proto: IDs, signatures, room-log state machine
   crypto/                  client half of docs/protocol.md (section 1)
   wire/                    API request/response structs, WebSocket message types, limits
-  bot/                     the SDK (package bot): public API
-    store/                 on-disk state
-    runtime/               connections, ingest, rotation, removal
+  bot/                     the SDK (package bot): public API, and each room's runtime
+                           (sync, catch-up, rotation, profile, removal) in room.go/server.go
+    internal/store/        on-disk state (SQLite, pure Go)
+    internal/api/          signed HTTP and the WebSocket
+    cli/                   the command line every bot gets (cli.Main)
     voice/                 send-only WebRTC mesh peer (pion/webrtc)
     audio/                 Source: Ogg/Opus reader; PCM encoder behind `-tags opus`
     core/                  the core commands, registered like any other command
-    names.go               the 50 default names
+    account.go             Init, the admin password, the 50 default names
     cmd/superchat-bot/     stock bot: bot.New + core + CLI
 server/                    `module main` (nobody imports it); requires shared via `replace => ../shared`
 ```
@@ -262,19 +264,30 @@ The bot's phrase also works in the app, which helps with debugging.
      the app-link files, and the admin-only `invites/uses`.
    - *Done when* every vector round-trips and `run-tests` passes. It now runs
      the `shared/` tests too.
-2. **A bot that answers.**
-   - Write `store`, the WebSocket and catch-up, ingest, and `Join(link)`.
-   - Add `init`/`run`/`join` and a hard-coded reply when the bot is
-     mentioned.
-   - *Done when* a phone invites the bot, mentions it, and gets a reply, and
-     a restart neither replays nor drops messages.
-3. **Framework and core commands.**
-   - Write `Command`/`Ctx`/hooks, `login` and admins, `name`/`picture`
-     across rooms, `join`/`leave`, rotation and re-publishing the profile,
-     `removeRoom`, and rate limits.
-   - *Done when* a kick from the phone cleans up the room within one
-     WebSocket event, and two bots in one chat each answer only their own
-     mentions.
+2. ~~**A bot that answers.**~~ Done.
+   - Done: `store`, the WebSocket and catch-up, ingest, `Join(link)`, and
+     the CLI (`init`, `run`, `join`, `rooms`, `passwd`). `help` is the first
+     core command.
+   - Integration tests in `shared/bot/bot_test.go` run a real server: join;
+     reply when tagged and stay quiet otherwise; unknown commands; edits
+     don't re-run; a restart answers what was missed exactly once; profile
+     re-published for later joiners; kicked live and while down; and the
+     binary itself (`TestCLI`).
+   - Still to try by hand: a phone inviting the bot.
+3. ~~**Core commands.**~~ Done.
+   - `help`, `login` (wrong guesses back off 1 s, 2 s, 4 s… up to 5 min;
+     if the bot is a room admin it deletes the message holding the
+     password, otherwise it says to) and `logout`.
+   - Admin only: `name`, `picture` (any image, cropped to a 512 px JPEG
+     like the app's; `picture remove`), `join <link>` and `leave`. Admins
+     who leave the room are dropped.
+   - `Ctx` gained `Attachments`, `Download`, `SendFile` and `Delete`. The
+     bot gained `SetName`, `SetPicture`, `Leave`, `CheckPassword` and
+     `SetAdmin`.
+   - Sends are limited per room (`Config.SendBurst`, `SendsPerSecond`:
+     default 10, then 1 a second).
+   - Tested against a real server, including two bots in one chat each
+     answering only their own mentions.
 4. **Voice.**
    - Build in this order: presence first, then join/leave with silence, then
      `OggFile` playback, then PCM under `-tags opus`.
