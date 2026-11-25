@@ -18,6 +18,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/canavan-a/super-chat/shared/proto"
+	"github.com/canavan-a/super-chat/shared/wire"
 	"main/config"
 	"main/database"
 	"main/push"
@@ -128,11 +129,7 @@ func (a *API) Router() *gin.Engine {
 func (a *API) fail(c *gin.Context, err error) {
 	var re *rooms.Error
 	if errors.As(err, &re) {
-		body := gin.H{"error": re.Msg}
-		if re.Head != nil {
-			body["head"] = re.Head
-		}
-		c.AbortWithStatusJSON(re.Status, body)
+		c.AbortWithStatusJSON(re.Status, wire.Error{Error: re.Msg, Head: re.Head})
 		return
 	}
 	abort(c, http.StatusInternalServerError, "server error")
@@ -168,7 +165,7 @@ func (a *API) createRoom(c *gin.Context) {
 		a.fail(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"id": first.Room, "head": rooms.Head{Seq: st.NextSeq - 1, Hash: st.Head}})
+	c.JSON(http.StatusCreated, wire.CreateRoomResponse{ID: first.Room, Head: rooms.Head{Seq: st.NextSeq - 1, Hash: st.Head}})
 }
 
 // member loads the room and checks the caller belongs to it.
@@ -210,7 +207,7 @@ func (a *API) roomState(c *gin.Context) {
 	a.db.Raw("SELECT COALESCE(MAX(pos), 0) AS pos, COALESCE(MAX(created_at), 0) AS at FROM messages WHERE room_id = ? AND kind = 'msg'", st.Room).Scan(&last)
 	// Members' encryption keys are in the log itself (create/join events),
 	// so there's nothing else to send.
-	c.JSON(http.StatusOK, gin.H{"events": evs, "lastPos": last.Pos, "lastAt": last.At})
+	c.JSON(http.StatusOK, wire.RoomState{Events: wireEvents(evs), LastPos: last.Pos, LastAt: last.At})
 }
 
 func (a *API) appendEvents(c *gin.Context) {
@@ -223,7 +220,7 @@ func (a *API) appendEvents(c *gin.Context) {
 		a.fail(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"head": rooms.Head{Seq: st.NextSeq - 1, Hash: st.Head}})
+	c.JSON(http.StatusOK, wire.HeadResponse{Head: rooms.Head{Seq: st.NextSeq - 1, Hash: st.Head}})
 }
 
 func (a *API) roomKeys(c *gin.Context) {
@@ -239,7 +236,7 @@ func (a *API) roomKeys(c *gin.Context) {
 	if envs == nil {
 		envs = []database.Envelope{}
 	}
-	c.JSON(http.StatusOK, gin.H{"envelopes": envs})
+	c.JSON(http.StatusOK, wire.Keys{Envelopes: wireEnvelopes(envs)})
 }
 
 // ---- messages ----
@@ -277,7 +274,7 @@ func (a *API) listMessages(c *gin.Context) {
 	if msgs == nil {
 		msgs = []database.Message{}
 	}
-	c.JSON(http.StatusOK, gin.H{"messages": msgs})
+	c.JSON(http.StatusOK, wire.Messages{Messages: wireMessages(msgs)})
 }
 
 // unread says how far the caller has read and how many messages from others
@@ -302,7 +299,7 @@ func (a *API) unread(c *gin.Context) {
 		abort(c, http.StatusInternalServerError, "db error")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"readPos": readPos, "count": count})
+	c.JSON(http.StatusOK, wire.Unread{ReadPos: readPos, Count: count})
 }
 
 func (a *API) postMessage(c *gin.Context) {
@@ -310,13 +307,7 @@ func (a *API) postMessage(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var req struct {
-		ID    string   `json:"id"`
-		Epoch int64    `json:"epoch"`
-		Kind  string   `json:"kind"`
-		Ct    string   `json:"ct"`
-		Blobs []string `json:"blobs"`
-	}
+	var req wire.PostMessage
 	if !bindBody(c, &req) {
 		return
 	}
@@ -364,13 +355,13 @@ func (a *API) postMessage(c *gin.Context) {
 		abort(c, http.StatusConflict, "duplicate message id")
 		return
 	}
-	a.hub.SendRoom(st.Room, wsMsg{"type": "message", "room": st.Room, "message": msg}, "")
+	a.hub.SendRoom(st.Room, wire.MessagePush{Type: wire.WSMessage, Room: st.Room, Message: wireMessage(msg)}, "")
 	// Devices that aren't connected right now (Google Play build) are woken
 	// to fetch it. Reactions, receipts, edits and call notices don't notify, so don't wake.
 	if req.Kind == "msg" {
 		a.push.Wake(st.Room)
 	}
-	c.JSON(http.StatusCreated, gin.H{"pos": msg.Pos, "createdAt": msg.CreatedAt})
+	c.JSON(http.StatusCreated, wire.PostMessageResponse{Pos: msg.Pos, CreatedAt: msg.CreatedAt})
 }
 
 var errBadBlobs = errors.New("bad blobs")
@@ -407,7 +398,7 @@ func (a *API) putBlob(c *gin.Context) {
 		abort(c, http.StatusInternalServerError, "db error")
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"id": id})
+	c.JSON(http.StatusCreated, wire.BlobID{ID: id})
 }
 
 func (a *API) getBlob(c *gin.Context) {
@@ -451,9 +442,7 @@ func (a *API) putAvatar(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var req struct {
-		Blob string `json:"blob"`
-	}
+	var req wire.BlobRef
 	if !bindBody(c, &req) {
 		return
 	}
@@ -555,12 +544,12 @@ func (a *API) getInvite(c *gin.Context) {
 		abort(c, http.StatusInternalServerError, "db error")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"room":    st.Room,
-		"preview": inv.Preview,
+	c.JSON(http.StatusOK, wire.Invite{
+		Room:    st.Room,
+		Preview: inv.Preview,
 		// The joiner replays the log to learn who to seal the new epoch to
 		// (and their keys), without trusting this server's word for it.
-		"events": evs,
+		Events: wireEvents(evs),
 	})
 }
 
@@ -582,7 +571,7 @@ func (a *API) joinInvite(c *gin.Context) {
 		a.fail(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"room": inv.RoomID, "head": rooms.Head{Seq: newSt.NextSeq - 1, Hash: newSt.Head}})
+	c.JSON(http.StatusOK, wire.JoinResponse{Room: inv.RoomID, Head: rooms.Head{Seq: newSt.NextSeq - 1, Hash: newSt.Head}})
 }
 
 // ---- vaults ----
@@ -604,7 +593,7 @@ func (a *API) getVault(c *gin.Context) {
 		return
 	}
 	c.Header("Cache-Control", "no-store")
-	c.JSON(http.StatusOK, gin.H{"blob": v.Blob})
+	c.JSON(http.StatusOK, wire.BlobRef{Blob: v.Blob})
 }
 
 func (a *API) putVault(c *gin.Context) {
@@ -614,9 +603,7 @@ func (a *API) putVault(c *gin.Context) {
 		abort(c, http.StatusForbidden, "this key can't write that vault")
 		return
 	}
-	var req struct {
-		Blob string `json:"blob"`
-	}
+	var req wire.BlobRef
 	if !bindBody(c, &req) {
 		return
 	}
@@ -664,7 +651,7 @@ func (a *API) eraseMine(c *gin.Context) {
 // ---- hub callbacks ----
 
 func (a *API) onEvent(room string, ev database.Event, st *proto.State) {
-	a.hub.SendRoom(room, wsMsg{"type": "event", "room": room, "event": ev}, "")
+	a.hub.SendRoom(room, wire.EventPush{Type: wire.WSEvent, Room: room, Event: wireEvent(ev)}, "")
 }
 
 func (a *API) onRemoved(room, member string) {
@@ -672,5 +659,5 @@ func (a *API) onRemoved(room, member string) {
 }
 
 func (a *API) onDeleted(room string, ids []string) {
-	a.hub.SendRoom(room, wsMsg{"type": "deleted", "room": room, "ids": ids}, "")
+	a.hub.SendRoom(room, wire.Deleted{Type: wire.WSDeleted, Room: room, IDs: ids}, "")
 }

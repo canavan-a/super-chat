@@ -11,9 +11,10 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/canavan-a/super-chat/shared/proto"
+	"github.com/canavan-a/super-chat/shared/wire"
 )
 
-type wsMsg map[string]any
+// Outgoing messages are the wire.* WebSocket types (shared with clients).
 
 // Hub tracks which sockets are subscribed to which rooms, and as which
 // member. There are no accounts: a socket proves membership room by room
@@ -70,7 +71,7 @@ func deliver(c *wsConn, raw []byte) {
 
 // SendRoom delivers m to every socket subscribed to room, except those
 // subscribed as `except`.
-func (h *Hub) SendRoom(room string, m wsMsg, except string) {
+func (h *Hub) SendRoom(room string, m any, except string) {
 	raw, err := json.Marshal(m)
 	if err != nil {
 		return
@@ -86,7 +87,7 @@ func (h *Hub) SendRoom(room string, m wsMsg, except string) {
 
 // SendMember delivers m to every socket subscribed to room as member (each
 // of their devices).
-func (h *Hub) SendMember(room, member string, m wsMsg) {
+func (h *Hub) SendMember(room, member string, m any) {
 	raw, err := json.Marshal(m)
 	if err != nil {
 		return
@@ -103,7 +104,7 @@ func (h *Hub) SendMember(room, member string, m wsMsg) {
 // Removed tells a member's sockets they're out of the room and stops
 // sending them its events.
 func (h *Hub) Removed(room, member string) {
-	raw, _ := json.Marshal(wsMsg{"type": "removed", "room": room})
+	raw, _ := json.Marshal(wire.Removed{Type: wire.WSRemoved, Room: room})
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for c, m := range h.rooms[room] {
@@ -130,11 +131,7 @@ const (
 	wsMaxRTCBox = 16 << 10
 )
 
-type wsSub struct {
-	Room   string `json:"room"`
-	Member string `json:"member"`
-	Sig    string `json:"sig"`
-}
+type wsSub = wire.Sub
 
 // ws sends a challenge, then accepts any number of room subscriptions, each
 // signed by that room's member key over the challenge. Afterwards a client
@@ -151,7 +148,7 @@ func (a *API) ws(c *gin.Context) {
 	_, _ = rand.Read(nonceBytes)
 	nonce := proto.B64.EncodeToString(nonceBytes)
 	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	if err := conn.WriteJSON(wsMsg{"type": "challenge", "nonce": nonce}); err != nil {
+	if err := conn.WriteJSON(wire.Challenge{Type: wire.WSChallenge, Nonce: nonce}); err != nil {
 		return
 	}
 
@@ -166,13 +163,7 @@ func (a *API) ws(c *gin.Context) {
 		rtc := newLimiter(600, time.Minute)
 		for {
 			_ = conn.SetReadDeadline(time.Now().Add(2 * wsPing))
-			var in struct {
-				Type string  `json:"type"`
-				Room string  `json:"room"`
-				Subs []wsSub `json:"subs"`
-				To   string  `json:"to"`
-				Box  string  `json:"box"`
-			}
+			var in wire.ClientWS
 			if err := conn.ReadJSON(&in); err != nil {
 				return
 			}
@@ -187,14 +178,14 @@ func (a *API) ws(c *gin.Context) {
 						rejected = append(rejected, s.Room)
 					}
 				}
-				raw, _ := json.Marshal(wsMsg{"type": "subscribed", "rooms": ok, "rejected": rejected})
+				raw, _ := json.Marshal(wire.Subscribed{Type: wire.WSSubscribed, Rooms: ok, Rejected: rejected})
 				deliver(wc, raw)
 			case "typing":
 				a.hub.mu.Lock()
 				member, subscribed := wc.subs[in.Room]
 				a.hub.mu.Unlock()
 				if subscribed && typing.allow(in.Room, time.Now()) {
-					a.hub.SendRoom(in.Room, wsMsg{"type": "typing", "room": in.Room, "member": member}, member)
+					a.hub.SendRoom(in.Room, wire.Typing{Type: wire.WSTyping, Room: in.Room, Member: member}, member)
 				}
 			case "rtc":
 				// The box is sealed and signed by the clients; the server
@@ -205,11 +196,11 @@ func (a *API) ws(c *gin.Context) {
 				if !subscribed || in.Box == "" || len(in.Box) > wsMaxRTCBox || !rtc.allow(in.Room, time.Now()) {
 					continue
 				}
-				out := wsMsg{"type": "rtc", "room": in.Room, "from": member, "box": in.Box}
+				out := wire.RTC{Type: wire.WSRTC, Room: in.Room, From: member, Box: in.Box}
 				if in.To == "" {
 					a.hub.SendRoom(in.Room, out, member)
 				} else {
-					out["to"] = in.To
+					out.To = in.To
 					a.hub.SendMember(in.Room, in.To, out)
 				}
 			}

@@ -37,6 +37,7 @@ import {
   utf8,
   unutf8,
 } from '../src/crypto';
+import {edPublicKey, hkdf, joinProofMessage, newId, openEnc, openSignal, randomBytes, sealSignal, sign} from '../src/crypto';
 
 // A stranger's key in a given room.
 const member = (room: string) => memberIdentity(newIdentity().entropy, room);
@@ -298,5 +299,189 @@ describe('interop fixture', () => {
       fs.mkdirSync(path.dirname(file), {recursive: true});
       fs.writeFileSync(file, JSON.stringify(out, null, 2));
     }
+  });
+});
+
+// ---- Go interop vectors (shared/crypto/interop_test.go) ----
+//
+// One vector format, both ways. This test writes ts-vectors.json for the Go
+// side to check, and checks go-vectors.json, which the Go tests write. Each
+// side reproduces what's deterministic (member IDs, the phrase, the invite key
+// and join proof, the vault ID) and opens everything else. Like the log
+// fixture above, ts-vectors.json is rewritten only when missing or with
+// WRITE_FIXTURE=1.
+
+interface Vectors {
+  entropy: string;
+  bobEntropy: string;
+  phrase: string;
+  fingerprint: string;
+  room: string;
+  server: string;
+  aliceId: string;
+  bobId: string;
+  events: SignedEvent[];
+  expect: {nextSeq: number; head: string; epoch: number; members: Record<string, string>};
+  envelopes: {epoch: number; member: string; sealed: string}[];
+  keys: Record<string, string>;
+  enc: {seq: number; expect: unknown}[];
+  invite: {link: string; preview: string; previewPlain: unknown};
+  messages: {message: ServerMessage; expect: unknown; ts: number}[];
+  rtc: {from: string; to: string; box: string; now: number; expect: unknown};
+  blob: {key: string; sealed: string; plain: string};
+  vault: {server: string; id: string; blob: string; rooms: string[]};
+  view: unknown;
+}
+
+// The room view in a form both languages build the same way: members sorted by
+// ID (Go has no insertion order), and "" for no name or color.
+const normView = (v: ReturnType<typeof roomView>) => ({
+  name: v.name ?? '',
+  color: v.color ?? '',
+  picture: v.picture,
+  retentionDays: v.retentionDays,
+  epoch: v.epoch,
+  names: v.names,
+  avatars: v.avatars,
+  members: [...v.members].sort((a, b) => (a.id < b.id ? -1 : 1)).map(m => ({id: m.id, role: m.role, name: m.name ?? ''})),
+  activity: v.activity,
+  wiped: v.wiped,
+});
+
+const VECTORS_DIR = path.resolve(__dirname, '../../shared/crypto/testdata');
+const strip = ({v: _v, ts: _ts, ...rest}: any) => rest;
+
+function buildVectors(): Vectors {
+  const entropy = Uint8Array.from({length: 32}, (_, i) => i + 1);
+  const bobEntropy = Uint8Array.from({length: 32}, (_, i) => 200 - i);
+  const server = 'https://chat.example';
+  const created = createRoomBatch(identityFromEntropy(entropy), {name: 'Den', color: '#4C8BF5'}, 'Alice', 30);
+  const room = created.room;
+  const alice = created.me;
+  const bob = memberIdentity(bobEntropy, room);
+  const s1 = replay(room, created.batch.events).state;
+  const preview = {name: 'Den', color: '#4C8BF5', inviter: 'Alice'};
+  const inv = createInvite(alice, s1, server, preview, {expiresAt: 0, maxUses: 0});
+  const s2 = replay(room, [...created.batch.events, ...inv.batch.events]).state;
+  const join = joinBatch(bob, s2, parseInviteLink(inv.link)!, preview, 'Bob');
+  const s3 = replay(room, [...created.batch.events, ...inv.batch.events, ...join.batch.events]).state;
+  // A profile picture, and a meta with a group picture and a name long enough
+  // to be cut at 80 UTF-16 units (the emoji counts as two).
+  const {signed: extra} = buildEvents(alice, s3, [
+    {kind: 'profile', enc: {displayName: 'Alice', avatar: {blob: newId(), key: b64(randomBytes(32)), at: 1_700_000_000_000}}, encEpoch: 2, encKey: join.key},
+    {kind: 'meta', enc: {name: '😀 ' + 'x'.repeat(100), picture: {blob: newId(), key: b64(randomBytes(32)), at: 1_700_000_000_123}}, encEpoch: 2, encKey: join.key},
+  ]);
+  const events = [...created.batch.events, ...inv.batch.events, ...join.batch.events, ...extra];
+  const r = replay(room, events);
+  const keys = {1: created.key, 2: join.key};
+  const msg = (from: typeof alice, content: any, pos: number) => {
+    const m = encryptMessage(from, room, 2, join.key, content);
+    const message: ServerMessage = {pos, id: m.id, room, epoch: 2, sender: from.id, kind: m.kind, ct: m.ct, createdAt: 0};
+    const d = decryptMessage(message, join.key);
+    return {message, expect: strip(d), ts: d.ts};
+  };
+  const first = msg(alice, {t: 'text', body: `hi <@${bob.id}> 😀 & "quotes"   end`, replyTo: newId()}, 1);
+  const now = 1_700_000_000_000;
+  const signal = {sid: 'alice-sid', to_sid: 'bob-sid', k: 'offer' as const, sdp: 'v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\n', muted: true, deaf: false};
+  const blobPlain = utf8('a picture, say');
+  const blob = encryptBlob(blobPlain);
+  const vk = vaultKeys(entropy, server);
+  return {
+    entropy: b64(entropy),
+    bobEntropy: b64(bobEntropy),
+    phrase: phraseFromEntropy(entropy).join(' '),
+    fingerprint: identityFromEntropy(entropy).id,
+    room,
+    server,
+    aliceId: alice.id,
+    bobId: bob.id,
+    events,
+    expect: {nextSeq: r.state.nextSeq, head: r.state.head, epoch: r.state.epoch, members: r.state.members},
+    envelopes: [
+      {epoch: 1, member: alice.id, sealed: created.batch.envelopes![alice.id]},
+      {epoch: 2, member: alice.id, sealed: join.batch.envelopes![alice.id]},
+      {epoch: 2, member: bob.id, sealed: join.batch.envelopes![bob.id]},
+    ],
+    keys: {1: b64(keys[1]), 2: b64(keys[2])},
+    enc: r.events.filter(e => e.enc).map(e => ({seq: e.seq, expect: openEnc(e, keys)})),
+    invite: {link: inv.link, preview: inv.batch.preview!, previewPlain: preview},
+    messages: [
+      first,
+      msg(alice, {t: 'file', files: [{blob: newId(), key: b64(randomBytes(32)), name: 'a.jpg', mime: 'image/jpeg', size: 1234, w: 10, h: 20}], body: 'caption'}, 2),
+      msg(alice, {t: 'edit', target: first.message.id, body: 'hi again'}, 3),
+      msg(bob, {t: 'reaction', target: first.message.id, emoji: '👍'}, 4),
+    ],
+    rtc: {from: alice.id, to: bob.id, box: sealSignal(alice, room, 2, join.key, bob.id, signal, now), now, expect: signal},
+    blob: {key: b64(blob.key), sealed: b64(blob.sealed), plain: b64(blobPlain)},
+    vault: {server, id: vk.id, blob: sealVault(vk, {v: 1, rooms: [room]}), rooms: [room]},
+    view: normView(roomView(r, keys)),
+  };
+}
+
+function checkVectors(v: Vectors) {
+  const entropy = unb64(v.entropy);
+  expect(phraseFromEntropy(entropy).join(' ')).toBe(v.phrase);
+  expect(b64(entropyFromPhrase(v.phrase))).toBe(v.entropy);
+  expect(identityFromEntropy(entropy).id).toBe(v.fingerprint);
+  const alice = memberIdentity(entropy, v.room);
+  const bob = memberIdentity(unb64(v.bobEntropy), v.room);
+  expect(alice.id).toBe(v.aliceId);
+  expect(bob.id).toBe(v.bobId);
+
+  const r = replay(v.room, v.events);
+  expect({nextSeq: r.state.nextSeq, head: r.state.head, epoch: r.state.epoch, members: r.state.members}).toEqual(v.expect);
+
+  const link = parseInviteLink(v.invite.link)!;
+  const inviteSeed = hkdf(link.secret, 'invite-sign');
+  expect(b64(edPublicKey(inviteSeed))).toBe(r.events.find(e => e.kind === 'invite')!.pub.key);
+  expect(b64(sign(inviteSeed, '', joinProofMessage(v.room, link.invite, bob.id)))).toBe(r.events.find(e => e.kind === 'join')!.pub.proof);
+  expect(openPreview(link.secret, v.invite.preview)).toEqual(v.invite.previewPlain);
+
+  const keys: Record<number, Uint8Array> = {};
+  for (const e of v.envelopes) {
+    const k = openEnvelope(e.member === alice.id ? alice : bob, v.room, e.epoch, e.sealed, r.commits[e.epoch]);
+    expect(b64(k)).toBe(v.keys[e.epoch]);
+    keys[e.epoch] = k;
+  }
+  expect(v.enc.length).toBeGreaterThanOrEqual(4);
+  for (const x of v.enc) expect(openEnc(r.events[x.seq], keys)).toEqual(x.expect);
+
+  expect(v.messages.length).toBeGreaterThanOrEqual(4);
+  for (const m of v.messages) {
+    const d = decryptMessage(m.message, keys[m.message.epoch]);
+    expect(strip(d)).toEqual(m.expect);
+    expect(d.ts).toBe(m.ts);
+  }
+
+  expect(strip(openSignal(v.room, v.rtc.from, v.rtc.to, v.rtc.box, keys[2], v.rtc.now))).toEqual(v.rtc.expect);
+  expect(b64(decryptBlob(unb64(v.blob.key), unb64(v.blob.sealed)))).toBe(v.blob.plain);
+
+  const vk = vaultKeys(entropy, v.vault.server);
+  expect(vk.id).toBe(v.vault.id);
+  expect(openVault(vk, v.vault.blob).rooms).toEqual(v.vault.rooms);
+
+  expect(normView(roomView(r, keys))).toEqual(v.view);
+}
+
+describe('Go interop vectors', () => {
+  it('writes vectors for the Go side, and they check out here too', () => {
+    checkVectors(buildVectors());
+    const file = path.join(VECTORS_DIR, 'ts-vectors.json');
+    const rewrite = process.env.WRITE_FIXTURE === '1' || !fs.existsSync(file);
+    // The committed file must still check out, unless it's being replaced.
+    if (!rewrite) checkVectors(JSON.parse(fs.readFileSync(file, 'utf8')));
+    if (rewrite) {
+      fs.mkdirSync(VECTORS_DIR, {recursive: true});
+      fs.writeFileSync(file, JSON.stringify(buildVectors(), null, 2));
+    }
+  });
+
+  it('opens what the Go side wrote', () => {
+    const file = path.join(VECTORS_DIR, 'go-vectors.json');
+    if (!fs.existsSync(file)) {
+      console.warn('no go-vectors.json yet: run the shared/ Go tests first');
+      return;
+    }
+    checkVectors(JSON.parse(fs.readFileSync(file, 'utf8')));
   });
 });

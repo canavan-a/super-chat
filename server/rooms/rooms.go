@@ -16,6 +16,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/canavan-a/super-chat/shared/proto"
+	"github.com/canavan-a/super-chat/shared/wire"
 	"main/database"
 )
 
@@ -93,14 +94,8 @@ func (s *Service) Forget(room string) {
 	s.mu.Unlock()
 }
 
-// Batch is a set of events appended together.
-type Batch struct {
-	Events    []proto.SignedEvent `json:"events"`
-	Envelopes map[string]string   `json:"envelopes"`
-	// Preview is the encrypted invite preview, required when the batch
-	// creates an invite (at most one per batch).
-	Preview string `json:"preview"`
-}
+// Batch is a set of events appended together (shared with clients).
+type Batch = wire.Batch
 
 // Error is a validation failure the caller should see. Status is the HTTP
 // status to answer with.
@@ -110,10 +105,8 @@ type Error struct {
 	Head   *Head
 }
 
-type Head struct {
-	Seq  int64  `json:"seq"`
-	Hash string `json:"hash"`
-}
+// Head is the latest event in a room's log (shared with clients).
+type Head = wire.Head
 
 func (e *Error) Error() string { return e.Msg }
 

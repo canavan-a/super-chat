@@ -5,7 +5,7 @@ A bot is a process with its own Super Chat account. It joins rooms through
 invite links, reads messages as they arrive, and acts on the ones that tag it.
 We ship it as a **Go SDK**: anyone builds their own bot by importing the
 module, registering handlers and calling `Run()`. Each bot owns its build and
-deployment; nothing ties it to Nix. A stock bot (`cmd/superchat-bot`) is the
+deployment; nothing ties it to Nix. A stock bot (`shared/bot/cmd/superchat-bot`) is the
 SDK with only the core commands.
 
 Rules:
@@ -27,30 +27,31 @@ Rules:
 ## Layout
 
 ```
-go.work                  local dev: server, shared and bot resolve to each other
-shared/                  github.com/canavan-a/super-chat/shared (backend code used by the server and the bot)
-  proto/                 DONE, moved from server/proto: IDs, signatures, room-log state machine
-  crypto/                NEW: client half of docs/protocol.md (section 1)
-  wire/                  NEW: API request/response structs, WebSocket message types, limits
-server/                  `module main` (nobody imports it); requires shared via `replace => ../shared`
-bot/                     NEW, its own go.mod: github.com/canavan-a/super-chat/bot
-  store/                 on-disk state
-  runtime/               connections, ingest, rotation, removal
-  voice/                 send-only WebRTC mesh peer (pion/webrtc)
-  audio/                 Source: Ogg/Opus reader; PCM encoder behind `-tags opus`
-  bot.go, ctx.go, ...    the public API (package bot)
-  core/                  the core commands, registered like any other command
-  names.go               the 50 default names
-  cmd/superchat-bot/     stock bot: bot.New + core + CLI
+go.work                    local dev: server and shared resolve to each other
+shared/                    ONE module: github.com/canavan-a/super-chat/shared
+  proto/                   DONE, moved from server/proto: IDs, signatures, room-log state machine
+  crypto/                  client half of docs/protocol.md (section 1)
+  wire/                    API request/response structs, WebSocket message types, limits
+  bot/                     the SDK (package bot): public API
+    store/                 on-disk state
+    runtime/               connections, ingest, rotation, removal
+    voice/                 send-only WebRTC mesh peer (pion/webrtc)
+    audio/                 Source: Ogg/Opus reader; PCM encoder behind `-tags opus`
+    core/                  the core commands, registered like any other command
+    names.go               the 50 default names
+    cmd/superchat-bot/     stock bot: bot.New + core + CLI
+server/                    `module main` (nobody imports it); requires shared via `replace => ../shared`
 ```
 
-- **Dependencies:** `shared` uses only the standard library and
-  `golang.org/x/crypto`, so people who import the bot never pull in the
-  server's SQLite, FCM and similar dependencies.
-- **Tags:** releases are tagged `shared/vX.Y.Z` and `bot/vX.Y.Z`.
-- **No `replace` in `bot/go.mod`:** it must require a tagged `shared`,
-  because people importing the bot need a real version to resolve. Locally,
-  `go.work` covers it.
+- **One module, no tags.** The bot SDK, the crypto and the wire types live in
+  one module, so they always come from the same commit. Consumers track main:
+  `go get github.com/canavan-a/super-chat/shared/bot@main`. Go records that
+  as a pseudo-version pinned to the commit, and running it again updates it.
+  There's nothing to bump and nothing to drift.
+- **Dependencies:** `shared` never pulls in the server's SQLite, FCM and
+  similar dependencies. It does get the bot's own (pion, a pure-Go SQLite).
+  The server only compiles the packages it imports, so its binary is
+  unchanged; its `go.sum` just gets longer.
 - **The server uses `replace`:** that's harmless because nobody imports the
   server. It also keeps the NixOS module's build working, since it runs
   `cd ${self}/server && go build`.
@@ -86,14 +87,22 @@ and the code disagree, follow `app/src/crypto/*.ts`. The doc is missing
   backoff.
 - **RTC boxes:** seal and open `rtc` boxes (`sc-rtc|…`), for voice.
 
-**Interop is a hard requirement.** Add a script under `tools/` that exports
-test vectors from the TS code: phrase → member IDs, a sealed envelope, a
-message ciphertext, an rtc box, a join proof and a blob. Go tests must
-reproduce and open each one, the same way as
-`shared/proto/interop_test.go` + `testdata/ts-log.json`, which the app's
-`__tests__/crypto.test.ts` writes.
+**Interop is a hard requirement, and it's tested in both directions.** The
+pattern is the same as `shared/proto/interop_test.go` +
+`testdata/ts-log.json`: the fixtures are committed, and they're rewritten
+only when missing or when run with `WRITE_FIXTURE=1`.
 
-## 2. Storage (`bot/store`)
+- **TS → Go:** `app/__tests__/crypto.test.ts` writes
+  `shared/crypto/testdata/ts-vectors.json`.
+  - Go must reproduce the deterministic values exactly: member IDs, the
+    commit, the invite key, the join proof and the vault ID.
+  - Go must open everything that uses a random nonce: envelopes, messages,
+    `enc`, rtc boxes, blobs, the preview and the vault.
+- **Go → TS:** the Go tests write `go-vectors.json`, and Jest opens it and
+  replays its log. This is the direction the bot depends on, because the app
+  has to accept what the bot sends.
+
+## 2. Storage (`shared/bot/store`)
 Use a pure-Go SQLite (`modernc.org/sqlite`, so there's no cgo) in `DataDir`.
 
 - **`account`:** entropy, the scrypt hash of the admin password, display
@@ -108,7 +117,7 @@ Use a pure-Go SQLite (`modernc.org/sqlite`, so there's no cgo) in `DataDir`.
   - It's exposed as `ctx.Store()`.
   - Plugins are free to use their own storage instead.
 
-## 3. Runtime (`bot/runtime`)
+## 3. Runtime (`shared/bot/runtime`)
 For each server, the runtime runs one WebSocket subscribed to every room the
 bot is in on that server.
 
@@ -193,7 +202,7 @@ An admin is per room because member IDs are per room: logging in in one chat
 does nothing in another. An admin who leaves or is kicked from a room loses
 admin there.
 
-## 5. Voice (`bot/voice`, send-only)
+## 5. Voice (`shared/bot/voice`, send-only)
 
 ```go
 b.Voice.Presence(room) []VoiceSession   // {Member, Name, Muted, Deaf}; works without joining
@@ -244,10 +253,13 @@ The bot's phrase also works in the app, which helps with debugging.
 
 1. **Groundwork.**
    - ~~Move `server/proto` to `shared/proto` and add `go.work`.~~ Done.
-   - Write `shared/crypto`, with the TS test-vector exporter and Go interop
-     tests.
-   - Write `shared/wire`, and move the server's WebSocket messages onto it.
-   - Create `bot/go.mod`.
+   - ~~Write `shared/crypto`, with interop vectors in both directions,
+     including the room view (`view.ts` → `view.go`).~~ Done.
+   - ~~Write `shared/wire`.~~ Done. The server sends every WebSocket
+     message and protocol response through it. `rooms.Batch` and
+     `rooms.Head` are aliases of the wire types.
+   - Left on `gin.H` on purpose, because they aren't protocol: `/health`,
+     the app-link files, and the admin-only `invites/uses`.
    - *Done when* every vector round-trips and `run-tests` passes. It now runs
      the `shared/` tests too.
 2. **A bot that answers.**
@@ -268,8 +280,8 @@ The bot's phrase also works in the app, which helps with debugging.
      `OggFile` playback, then PCM under `-tags opus`.
    - *Done when* phones on Android and web hear a clip, the bot's tile shows
      it as speaking or muted, and a kick ends its call.
-5. **Polish.** An example bot in `bot/examples/`, Go docs, a `bot/v0.1.0`
-   tag, and optionally `lib`/NixOS helpers in the flake for our own boxes.
+5. **Polish.** An example bot in `shared/bot/examples/`, Go docs,
+   and optionally `lib`/NixOS helpers in the flake for our own boxes.
 
 ## Risks
 - **Crypto drift between Go and TS** is the main risk. The vector exporter is

@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/canavan-a/super-chat/shared/proto"
+	"github.com/canavan-a/super-chat/shared/wire"
 )
 
 const (
@@ -104,7 +105,7 @@ func absDur(d time.Duration) time.Duration {
 }
 
 func abort(c *gin.Context, status int, msg string) {
-	c.AbortWithStatusJSON(status, gin.H{"error": msg})
+	c.AbortWithStatusJSON(status, wire.Error{Error: msg})
 }
 
 func caller(c *gin.Context) string { return c.GetString("member") }

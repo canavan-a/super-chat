@@ -128,6 +128,7 @@ type Invite struct {
 	Uses      int    `json:"uses"`
 	Revoked   bool   `json:"revoked"`
 	Creator   string `json:"creator"`
+	CreatedAt int64  `json:"createdAt"`
 }
 
 // State is what replaying a room's log yields.
@@ -285,7 +286,7 @@ func (s *State) Apply(e *Event, now int64) error {
 		if _, ok := s.Invites[p.ID]; ok {
 			return errors.New("invite exists")
 		}
-		s.Invites[p.ID] = &Invite{Key: p.Key, ExpiresAt: p.ExpiresAt, MaxUses: p.MaxUses, Creator: author}
+		s.Invites[p.ID] = &Invite{Key: p.Key, ExpiresAt: p.ExpiresAt, MaxUses: p.MaxUses, Creator: author, CreatedAt: e.Ts}
 
 	case "revoke":
 		if !s.isAdmin(author) {

@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
+	"github.com/canavan-a/super-chat/shared/wire"
 	"main/database"
 )
 
@@ -24,9 +25,7 @@ func (a *API) putPicture(c *gin.Context) {
 		abort(c, http.StatusForbidden, "admins only")
 		return
 	}
-	var req struct {
-		Blob string `json:"blob"`
-	}
+	var req wire.BlobRef
 	if !bindBody(c, &req) {
 		return
 	}
