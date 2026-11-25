@@ -32,69 +32,71 @@ import (
 // repo, with people played by the same crypto the app uses.
 
 var (
-	serverOnce sync.Once
-	serverURL  string
-	serverErr  error
-	serverStop func()
+	buildOnce sync.Once
+	serverBin string
+	buildErr  error
+	buildDir  string
 )
 
 func TestMain(m *testing.M) {
 	code := m.Run()
-	if serverStop != nil {
-		serverStop()
+	if buildDir != "" {
+		_ = os.RemoveAll(buildDir)
 	}
 	os.Exit(code)
 }
 
+// startServer starts a fresh server for one test (built once per run). Each
+// test gets its own: the server limits rooms and joins per IP per hour, and
+// every test comes from 127.0.0.1.
 func startServer(t *testing.T) string {
 	t.Helper()
-	serverOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "superchat-bot-test-")
-		if err != nil {
-			serverErr = err
+	buildOnce.Do(func() {
+		if buildDir, buildErr = os.MkdirTemp("", "superchat-bot-test-"); buildErr != nil {
 			return
 		}
-		bin := filepath.Join(dir, "superchat-server")
-		build := exec.Command("go", "build", "-o", bin, "./cmd/superchat-server")
+		serverBin = filepath.Join(buildDir, "superchat-server")
+		build := exec.Command("go", "build", "-o", serverBin, "./cmd/superchat-server")
 		build.Dir = filepath.Join("..", "..", "server")
 		build.Env = append(os.Environ(), "CGO_ENABLED=0")
 		if out, err := build.CombinedOutput(); err != nil {
-			serverErr = fmt.Errorf("build the server: %v\n%s", err, out)
-			return
+			buildErr = fmt.Errorf("build the server: %v\n%s", err, out)
 		}
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			serverErr = err
-			return
-		}
-		addr := ln.Addr().String()
-		ln.Close()
-		cmd := exec.Command(bin)
-		cmd.Env = append(os.Environ(), "SUPERCHAT_LISTEN_ADDR="+addr, "SUPERCHAT_DATA_DIR="+dir, "SUPERCHAT_STATIC_LISTEN_ADDR=127.0.0.1:0")
-		if err := cmd.Start(); err != nil {
-			serverErr = err
-			return
-		}
-		serverStop = func() { _ = cmd.Process.Kill(); _ = cmd.Wait(); _ = os.RemoveAll(dir) }
-		serverURL = "http://" + addr
-		for i := 0; i < 100; i++ {
-			if resp, err := http.Get(serverURL + "/health"); err == nil {
-				resp.Body.Close()
-				return
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		serverErr = errors.New("the server didn't start")
 	})
-	if serverErr != nil {
-		t.Fatal(serverErr)
+	if buildErr != nil {
+		t.Fatal(buildErr)
 	}
-	return serverURL
+	dir := t.TempDir()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	cmd := exec.Command(serverBin)
+	cmd.Env = append(os.Environ(), "SUPERCHAT_LISTEN_ADDR="+addr, "SUPERCHAT_DATA_DIR="+dir, "SUPERCHAT_STATIC_LISTEN_ADDR=127.0.0.1:0")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// Registered after TempDir's cleanup, so it runs first: the server stops
+	// before its data directory goes.
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	url := "http://" + addr
+	for i := 0; i < 100; i++ {
+		if resp, err := http.Get(url + "/health"); err == nil {
+			resp.Body.Close()
+			return url
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal(errors.New("the server didn't start"))
+	return ""
 }
 
 // ---- a person, as the app would be ----
 
 type person struct {
+	mu       sync.Mutex // phones use it from WebRTC callbacks too
 	t        *testing.T
 	c        *api.Client
 	e        crypto.Entropy
@@ -120,15 +122,24 @@ func (p *person) must(err error) {
 }
 
 func (p *person) createRoom(name string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	room, b, key, me, err := crypto.CreateRoom(p.e, crypto.RoomMeta{Name: name, Color: "#4C8BF5"}, p.name, 0, now())
 	p.must(err)
 	_, err = p.c.CreateRoom(context.Background(), me, b)
 	p.must(err)
 	p.room, p.me, p.keys[1], p.roomName = room, me, key, name
-	p.refresh()
+	p.refreshLocked()
 }
 
 func (p *person) refresh() {
+	p.t.Helper()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.refreshLocked()
+}
+
+func (p *person) refreshLocked() {
 	p.t.Helper()
 	st, err := p.c.State(context.Background(), p.room, p.me, 0)
 	p.must(err)
@@ -144,10 +155,30 @@ func (p *person) refresh() {
 		p.must(err)
 		p.keys[env.Epoch] = k
 	}
+	// Like the app: publish our profile again under a key we didn't make,
+	// so whoever joined since can read our name.
+	mine := int64(-1)
+	for _, e := range p.rep.Events {
+		if e.Kind == "profile" && e.Author == p.me.ID && e.Epoch > mine {
+			mine = e.Epoch
+		}
+	}
+	if s := p.rep.State; mine < s.Epoch && p.keys[s.Epoch] != nil && s.IsMember(p.me.ID) {
+		signed, _, err := crypto.BuildEvents(p.me, s, []crypto.NewEvent{{Kind: "profile", Enc: crypto.Profile{DisplayName: p.name}, EncEpoch: s.Epoch, EncKey: p.keys[s.Epoch]}}, now())
+		p.must(err)
+		if _, err := p.c.Append(context.Background(), p.room, p.me, &wire.Batch{Events: signed}); err == nil {
+			st, err := p.c.State(context.Background(), p.room, p.me, 0)
+			p.must(err)
+			p.rep, err = crypto.ReplayLog(p.room, api.Signed(st.Events))
+			p.must(err)
+		}
+	}
 }
 
 func (p *person) invite() string {
-	p.refresh()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.refreshLocked()
 	link, b, err := crypto.CreateInvite(p.me, p.rep.State, p.c.Server, crypto.InvitePreview{Name: p.roomName, Color: "#4C8BF5", Inviter: p.name}, 0, 0, now())
 	p.must(err)
 	_, err = p.c.Append(context.Background(), p.room, p.me, b)
@@ -156,6 +187,8 @@ func (p *person) invite() string {
 }
 
 func (p *person) join(link string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	l, err := crypto.ParseInviteLink(link)
 	p.must(err)
 	inv, err := p.c.Invite(context.Background(), l.Invite)
@@ -168,12 +201,14 @@ func (p *person) join(link string) {
 	_, err = p.c.Join(context.Background(), l.Invite, p.me, b)
 	p.must(err)
 	p.keys[ep.N] = ep.Key
-	p.refresh()
+	p.refreshLocked()
 }
 
 func (p *person) send(c crypto.Content) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.t.Helper()
-	p.refresh()
+	p.refreshLocked()
 	epoch := p.rep.State.Epoch
 	id := proto.NewID()
 	ct, kind, err := crypto.EncryptMessage(p.me, p.room, epoch, p.keys[epoch], c, id, now())
@@ -193,8 +228,10 @@ type seen struct {
 }
 
 func (p *person) messages() []seen {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.t.Helper()
-	p.refresh()
+	p.refreshLocked()
 	msgs, err := p.c.Messages(context.Background(), p.room, p.me, 0, 200)
 	p.must(err)
 	var out []seen
@@ -218,7 +255,9 @@ func (p *person) repliesTo(botID, id string) []seen {
 }
 
 func (p *person) kick(target string) {
-	p.refresh()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.refreshLocked()
 	signed, s1, err := crypto.BuildEvents(p.me, p.rep.State, []crypto.NewEvent{{Kind: "kick", Pub: proto.TargetPub{Target: target}}}, now())
 	p.must(err)
 	ep, err := crypto.NewEpoch(s1, nil)
@@ -230,7 +269,9 @@ func (p *person) kick(target string) {
 }
 
 func (p *person) nameOf(id string) string {
-	p.refresh()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.refreshLocked()
 	return p.rep.View(p.keys).Names[id]
 }
 
@@ -539,8 +580,10 @@ func TestCLI(t *testing.T) {
 // ---- phase 3: the core commands ----
 
 func (p *person) sendFile(name, mime string, data []byte, caption string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.t.Helper()
-	p.refresh()
+	p.refreshLocked()
 	key, sealed := crypto.EncryptBlob(data)
 	blob, err := p.c.PutBlob(context.Background(), p.room, p.me, sealed)
 	p.must(err)
@@ -555,7 +598,9 @@ func (p *person) sendFile(name, mime string, data []byte, caption string) string
 }
 
 func (p *person) promote(target string) {
-	p.refresh()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.refreshLocked()
 	signed, _, err := crypto.BuildEvents(p.me, p.rep.State, []crypto.NewEvent{{Kind: "promote", Pub: proto.TargetPub{Target: target}}}, now())
 	p.must(err)
 	_, err = p.c.Append(context.Background(), p.room, p.me, &wire.Batch{Events: signed})
@@ -563,7 +608,9 @@ func (p *person) promote(target string) {
 }
 
 func (p *person) leaveRoom() {
-	p.refresh()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.refreshLocked()
 	signed, s1, err := crypto.BuildEvents(p.me, p.rep.State, []crypto.NewEvent{{Kind: "leave"}}, now())
 	p.must(err)
 	_ = s1
@@ -798,4 +845,23 @@ func TestSendRateLimit(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("the spam command never finished")
 	}
+}
+
+// currentKey is the room's current epoch and key, brought up to date.
+func (p *person) currentKey() (int64, []byte) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.refreshLocked()
+	e := p.rep.State.Epoch
+	return e, p.keys[e]
+}
+
+// keyFor is an epoch's key, refreshing once if we don't hold it yet.
+func (p *person) keyFor(epoch int64) []byte {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.keys[epoch] == nil {
+		p.refreshLocked()
+	}
+	return p.keys[epoch]
 }

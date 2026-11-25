@@ -101,6 +101,12 @@ export interface ChatMessage {
   content: DecryptedMessage | null;
   /** Set when the message couldn't be decrypted or verified. */
   error?: string;
+  /**
+   * Local-only, on a message we had no key for yet: the message as the
+   * server sent it, so it can be decrypted once that epoch's key arrives
+   * (see retryNoKey).
+   */
+  raw?: ServerMessage;
   /** Local-only: still being sent. */
   pending?: boolean;
   /** Local-only, on a file message being sent: each file's upload progress (0–1), and why it failed if it did. */
@@ -658,18 +664,39 @@ async function loadKeys(r: Room): Promise<void> {
   if (!r.log) return;
   const envelopes = await api.keys(r.server, r.id, r.me);
   let opened = 0;
+  const added = new Set<number>();
   for (const env of envelopes) {
     if (r.keys[env.epoch]) continue;
     const commit = r.log.commits[env.epoch];
     if (!commit) continue;
     try {
       r.keys[env.epoch] = openEnvelope(r.me, r.id, env.epoch, env.sealed, commit);
+      added.add(env.epoch);
     } catch {
       // A bad envelope: leave that epoch unreadable rather than trust it.
     }
     // Each is a key exchange in JS: a room with many epochs held the UI.
     if (++opened % 4 === 0) await yieldToUi();
   }
+  if (added.size) await retryNoKey(r, added);
+}
+
+/**
+ * Decrypts the messages held as "No key" whose epoch key just arrived.
+ * Without this they stayed errored: catching up only fetches what's newer
+ * than the newest message held, so nothing fetched them again.
+ */
+async function retryNoKey(r: Room, epochs: Set<number>) {
+  const stuck = r.messages.filter(m => m.raw && epochs.has(m.epoch));
+  if (!stuck.length) return;
+  for (let i = 0; i < stuck.length; i++) {
+    // Off the timeline first: a reaction, receipt or edit files elsewhere
+    // and wouldn't replace its errored row.
+    r.messages = r.messages.filter(m => m.id !== stuck[i].id);
+    ingest(r, decrypt(r, stuck[i].raw!));
+    if (i % 8 === 7) await yieldToUi();
+  }
+  emit();
 }
 
 /**
@@ -780,7 +807,7 @@ function retentionCutoff(r: Room): number {
 function decrypt(r: Room, m: ServerMessage): ChatMessage {
   const base = {id: m.id, pos: m.pos, sender: m.sender, createdAt: m.createdAt, epoch: m.epoch};
   const key = r.keys[m.epoch];
-  if (!key) return {...base, content: null, error: 'No key for this message'};
+  if (!key) return {...base, content: null, error: 'No key for this message', raw: m};
   try {
     return {...base, content: decryptMessage(m, key)};
   } catch (e) {

@@ -288,11 +288,28 @@ The bot's phrase also works in the app, which helps with debugging.
      default 10, then 1 a second).
    - Tested against a real server, including two bots in one chat each
      answering only their own mentions.
-4. **Voice.**
-   - Build in this order: presence first, then join/leave with silence, then
-     `OggFile` playback, then PCM under `-tags opus`.
-   - *Done when* phones on Android and web hear a clip, the bot's tile shows
-     it as speaking or muted, and a kick ends its call.
+4. ~~**Voice.**~~ Done (send-only).
+   - `b.Voice.Presence` (works without joining: probe, then beats; 40 s
+     timeout) and `OnVoicePresence`.
+   - `b.Voice.Join` makes a send-only mesh peer (pion). The app's
+     protocol, followed exactly: who offers, `here`/`full`, ICE restarts at
+     2, 4 and 8 s, beats every 15 s (always "sound off": it can't hear).
+     SDP is tuned like `call/sdp.ts`. pion turns send-only into
+     send-and-receive when the offer is send-and-receive, so the answers
+     the bot sends are marked send-only.
+   - Silence frames go out whenever nothing plays, so phones never show
+     the bot as stalled. `call.Play` takes an `audio.Source`:
+     `audio.Ogg`/`OggFile` (no codec needed), `audio.Packets`, or
+     `audio.PCM` with `-tags opus` (libopus; plus `nolibopusfile`).
+     Playback also has `Stop`, `Done`, `SetMuted` and `Leave`.
+   - Hooks: `OnVoiceJoined`, `OnVoiceLeft`, `OnVoicePeerJoined`,
+     `OnVoicePeerLeft`. A kick ends the call. "… joined/left the call"
+     lines are posted like the app's. The core command is `voice
+     who|join|leave` (join and leave are for admins).
+   - Tested with a phone played by pion over the real server, both join
+     orders. Still to check with a real phone: that a browser stops
+     sending its microphone on the bot's send-only answer, and how the
+     bot's tile looks.
 5. **Polish.** An example bot in `shared/bot/examples/`, Go docs,
    and optionally `lib`/NixOS helpers in the flake for our own boxes.
 

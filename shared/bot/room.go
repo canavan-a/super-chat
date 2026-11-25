@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 
 	"github.com/canavan-a/super-chat/shared/bot/internal/api"
 	"github.com/canavan-a/super-chat/shared/crypto"
@@ -46,6 +47,9 @@ type room struct {
 
 	limMu sync.Mutex // the send limiter
 	lim   limiter
+
+	roomVoice
+	goneFlag atomic.Bool // removed from the room (readable without r.mu)
 }
 
 func (r *room) worker() {
@@ -67,8 +71,8 @@ func (r *room) enqueue(t func()) {
 	}
 }
 
-// call runs fn on the worker and waits for it.
-func (r *room) call(ctx context.Context, fn func() error) error {
+// do runs fn on the worker and waits for it.
+func (r *room) do(ctx context.Context, fn func() error) error {
 	done := make(chan error, 1)
 	r.enqueue(func() { done <- fn() })
 	select {
@@ -130,6 +134,8 @@ func (r *room) syncLog(ctx context.Context) error {
 		return err
 	}
 	r.view = r.rep.View(r.keys)
+	r.viewSnap.Store(r.view)
+	r.publishKeys()
 	return nil
 }
 
@@ -256,6 +262,7 @@ func (r *room) append(ctx context.Context, build func(s *proto.State) []crypto.N
 		}
 		if ep != nil {
 			r.keys[ep.N] = ep.Key
+			r.publishKeys()
 			if err := r.b.st.PutKey(r.id, ep.N, ep.Key); err != nil {
 				return err
 			}
@@ -428,6 +435,7 @@ func (r *room) removeLocked(ctx context.Context, why string) {
 		return
 	}
 	r.gone = true
+	r.goneFlag.Store(true)
 	r.log.Info("left the room", "why", why)
 	if err := r.b.st.DeleteRoom(r.id); err != nil {
 		r.log.Error("couldn't forget the room", "err", err)

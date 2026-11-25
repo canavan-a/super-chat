@@ -90,6 +90,16 @@ func (s *server) session(ctx context.Context) error {
 	for _, r := range rooms {
 		r.enqueue(r.refresh)
 	}
+	// A call that outlived the connection says it's here again, so anyone who
+	// joined meanwhile connects (as the app re-sends its join).
+	for _, r := range rooms {
+		r.vmu.Lock()
+		c := r.call
+		r.vmu.Unlock()
+		if c != nil {
+			c.post(event{kind: evRejoin})
+		}
+	}
 	s.log.Info("connected", "rooms", len(rooms))
 
 	for {
@@ -117,6 +127,8 @@ func (s *server) dispatch(m *wire.ServerWS) {
 		return
 	}
 	switch m.Type {
+	case wire.WSRTC:
+		r.onRTC(m)
 	case wire.WSEvent:
 		r.enqueue(func() { r.locked(r.sync) })
 	case wire.WSMessage:
@@ -176,6 +188,10 @@ func (r *room) refresh() {
 	r.locked(r.sync)
 	if err := r.catchUp(r.ctx); err != nil && err != errGone {
 		r.log.Warn("couldn't catch up", "err", err)
+	}
+	// Ask who's in voice, rather than waiting up to 15 s for their beats.
+	if !r.goneFlag.Load() {
+		r.probe()
 	}
 }
 

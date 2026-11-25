@@ -27,6 +27,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pion/webrtc/v4"
+
 	"github.com/canavan-a/super-chat/shared/bot/internal/api"
 	"github.com/canavan-a/super-chat/shared/bot/internal/store"
 	"github.com/canavan-a/super-chat/shared/crypto"
@@ -48,6 +50,10 @@ type Config struct {
 	// SendsPerSecond. Sends past the limit wait. Defaults: 10, then 1 a second.
 	SendBurst      int
 	SendsPerSecond float64
+	// ICEServers are the STUN/TURN servers for voice. nil means
+	// DefaultICEServers (the app's default); an empty list means none, so
+	// only direct connections work (fine on one network, or with a public IP).
+	ICEServers []webrtc.ICEServer
 }
 
 // Access says who may run a command.
@@ -76,12 +82,14 @@ type Bot struct {
 	entropy crypto.Entropy
 	now     func() time.Time
 
-	hmu       sync.RWMutex // the handlers below
-	commands  map[string]*command
-	onMessage []func(*Ctx) error
-	onJoin    []func(context.Context, Room)
-	onRemoved []func(context.Context, string)
-	unknown   func(*Ctx) error
+	hmu        sync.RWMutex // the handlers below
+	commands   map[string]*command
+	onMessage  []func(*Ctx) error
+	onJoin     []func(context.Context, Room)
+	onRemoved  []func(context.Context, string)
+	onStart    []func(context.Context)
+	unknown    func(*Ctx) error
+	voiceHooks voiceHooks
 
 	mu        sync.Mutex
 	name      string
@@ -90,6 +98,11 @@ type Bot struct {
 	rooms     map[string]*room
 	servers   map[string]*server
 	runCtx    context.Context // set while Run runs
+
+	// Voice is the bot's voice side: presence, and joining calls.
+	Voice *Voice
+	// voiceSid is the session id the bot probes for presence with.
+	voiceSid string
 }
 
 // New opens the bot in cfg.DataDir.
@@ -134,7 +147,7 @@ func New(cfg Config) (*Bot, error) {
 		return nil, err
 	}
 	pictureAt, _ := strconv.ParseInt(string(at), 10, 64)
-	return &Bot{
+	b := &Bot{
 		cfg:       cfg,
 		log:       cfg.Logger,
 		st:        st,
@@ -146,7 +159,10 @@ func New(cfg Config) (*Bot, error) {
 		commands:  map[string]*command{},
 		rooms:     map[string]*room{},
 		servers:   map[string]*server{},
-	}, nil
+	}
+	b.Voice = &Voice{b: b}
+	b.voiceSid = crypto.B64.EncodeToString(crypto.RandomBytes(9))
+	return b, nil
 }
 
 // Name is the bot's display name.
@@ -195,6 +211,14 @@ func (b *Bot) OnRemoved(fn func(ctx context.Context, roomID string)) {
 	b.hmu.Lock()
 	defer b.hmu.Unlock()
 	b.onRemoved = append(b.onRemoved, fn)
+}
+
+// OnStart runs once Run has loaded the bot's rooms (and keeps running for as
+// long as ctx lasts, so it can start long-lived work: say, joining voice).
+func (b *Bot) OnStart(fn func(ctx context.Context)) {
+	b.hmu.Lock()
+	defer b.hmu.Unlock()
+	b.onStart = append(b.onStart, fn)
 }
 
 // CommandInfo describes a registered command.
@@ -247,6 +271,13 @@ func (b *Bot) Run(ctx context.Context) error {
 		return err
 	}
 	defer stopControl()
+	go b.voiceTicker(ctx)
+	b.hmu.RLock()
+	starts := append([]func(context.Context){}, b.onStart...)
+	b.hmu.RUnlock()
+	for _, h := range starts {
+		go b.safely("OnStart", func() error { h(ctx); return nil })
+	}
 	b.log.Info("bot running", "name", b.Name(), "rooms", len(rows))
 	<-ctx.Done()
 	return nil
@@ -300,6 +331,8 @@ func (b *Bot) openRoom(ctx context.Context, row store.Room) (*room, error) {
 		lastPos: row.LastPos,
 	}
 	r.view = rep.View(keys)
+	r.viewSnap.Store(r.view)
+	r.publishKeys()
 	b.mu.Lock()
 	b.rooms[r.id] = r
 	b.mu.Unlock()
@@ -412,7 +445,7 @@ func (b *Bot) Join(ctx context.Context, link string) (Room, error) {
 	if err != nil {
 		return Room{}, err
 	}
-	if err := r.call(ctx, func() error {
+	if err := r.do(ctx, func() error {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		return r.sync(r.ctx)

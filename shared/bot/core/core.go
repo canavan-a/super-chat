@@ -27,6 +27,7 @@ func Register(b *bot.Bot) {
 	b.Command("picture", bot.Admin, "picture (with an image attached): set my picture, in every room; picture remove: take it off", picture)
 	b.Command("join", bot.Admin, "join <invite link>: join another chat", join)
 	b.Command("leave", bot.Admin, "leave: leave this chat", leave)
+	b.Command("voice", bot.Anyone, "voice who: who's in this chat's voice; voice join / voice leave (admins): bring me in or out", voice)
 }
 
 // help lists the commands the sender can use.
@@ -193,4 +194,55 @@ func title(r bot.Room) string {
 		return strings.Join(names, ", ")
 	}
 	return "the chat"
+}
+
+// ---- voice ----
+
+func voice(c *bot.Ctx) error {
+	sub := ""
+	if len(c.Args) > 0 {
+		sub = strings.ToLower(c.Args[0])
+	}
+	switch sub {
+	case "who":
+		people := c.Bot.Voice.Presence(c.Room.ID)
+		call := c.Bot.Voice.Call(c.Room.ID)
+		if len(people) == 0 && call == nil {
+			return c.Reply("Nobody's in voice.")
+		}
+		var names []string
+		for _, p := range people {
+			n := p.Name
+			if n == "" {
+				n = "someone"
+			}
+			if p.Muted {
+				n += " (muted)"
+			}
+			names = append(names, n)
+		}
+		if call != nil {
+			names = append(names, c.Bot.Name()+" (me)")
+		}
+		return c.Reply(fmt.Sprintf("In voice (%d): %s", len(names), strings.Join(names, ", ")))
+	case "join", "leave":
+		if !c.IsAdmin() {
+			return c.Reply("Only the bot's admins can do that. Log in first: tag me with login and the admin password.")
+		}
+		if sub == "join" {
+			if _, err := c.Bot.Voice.Join(c, c.Room.ID); err != nil {
+				return c.Reply("Couldn't join voice: " + err.Error())
+			}
+			return c.Reply("I'm in voice.")
+		}
+		call := c.Bot.Voice.Call(c.Room.ID)
+		if call == nil {
+			return c.Reply("I'm not in voice.")
+		}
+		if err := call.Leave(c); err != nil {
+			return err
+		}
+		return c.Reply("Left voice.")
+	}
+	return c.Reply("voice who, voice join or voice leave.")
 }
