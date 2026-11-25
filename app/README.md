@@ -16,8 +16,8 @@ E2E=1 npx jest __tests__/e2e.test.ts --forceExit   # builds and runs the real se
 
 - `src/crypto/` — the client half of `docs/protocol.md`: identity and the
   recovery phrase, sealing, the room log and its rules, messages, invites. The
-  Go server has the same rules in `server/proto`; `__tests__/crypto.test.ts`
-  writes a log that `server/proto/interop_test.go` replays.
+  Go server has the same rules in `shared/proto`; `__tests__/crypto.test.ts`
+  writes a log that `shared/proto/interop_test.go` replays.
 - `src/store.ts` — every room's verified log, keys and decrypted messages, kept
   live over one WebSocket per server. All actions (send, invite, kick…) are here.
 - `src/api.ts` — signed requests. There are no logins or tokens.

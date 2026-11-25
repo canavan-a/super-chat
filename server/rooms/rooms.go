@@ -15,8 +15,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/canavan-a/super-chat/shared/proto"
 	"main/database"
-	"main/proto"
 )
 
 // Service serializes writes per room and caches each room's replayed state.

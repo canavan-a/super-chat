@@ -92,6 +92,7 @@
 
           run-tests = pkgs.writeShellScriptBin "run-tests" ''
             set -e
+            (cd "${repoRoot}/shared" && ${pkgs.go}/bin/go test ./...)
             (cd "${repoRoot}/server" && ${pkgs.go}/bin/go test ./...)
             (cd "${repoRoot}/app" && ${pkgs.nodejs_22}/bin/npx jest)
             (cd "${repoRoot}/app" && E2E=1 ${pkgs.nodejs_22}/bin/npx jest __tests__/e2e.test.ts --forceExit)

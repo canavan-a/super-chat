@@ -78,6 +78,7 @@ ignore deletes or screenshot blocking. Keys rotate per membership change, not pe
 ```
 app/        React Native app (Android APK + web), forked from super-badger's
 server/     Go + SQLite server: signed requests, room logs, WebSocket fan-out
+shared/     Go protocol code used by the server (and the bot SDK): IDs, signatures, room-log rules
 tools/      appart: generates the logo data and launcher icons from art/
 art/        the pixel art (chat bubble + "Super Chat" in super-badger's lettering)
 docs/       protocol.md

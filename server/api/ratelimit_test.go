@@ -12,8 +12,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/canavan-a/super-chat/shared/proto"
 	"main/config"
-	"main/proto"
 	"main/rooms"
 )
 

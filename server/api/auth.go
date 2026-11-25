@@ -12,7 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"main/proto"
+	"github.com/canavan-a/super-chat/shared/proto"
 )
 
 const (

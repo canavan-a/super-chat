@@ -10,7 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 
-	"main/proto"
+	"github.com/canavan-a/super-chat/shared/proto"
 )
 
 type wsMsg map[string]any

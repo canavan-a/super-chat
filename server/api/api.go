@@ -17,9 +17,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
+	"github.com/canavan-a/super-chat/shared/proto"
 	"main/config"
 	"main/database"
-	"main/proto"
 	"main/push"
 	"main/rooms"
 )

@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/canavan-a/super-chat/shared/proto"
 	"main/config"
 	"main/database"
-	"main/proto"
 	"main/rooms"
 	"main/sweeper"
 )

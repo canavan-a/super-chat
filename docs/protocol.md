@@ -1,6 +1,6 @@
 # Super Chat protocol (v1)
 
-Everything here is implemented twice: in Go (`server/proto`, which the server
+Everything here is implemented twice: in Go (`shared/proto`, which the server
 uses to validate) and in TypeScript (`app/src/crypto`, which every client uses
 to verify the server). The two must agree byte for byte.
 

@@ -6,7 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"main/proto"
+	"github.com/canavan-a/super-chat/shared/proto"
 )
 
 // landing is what an invite link opens when the app isn't installed or the

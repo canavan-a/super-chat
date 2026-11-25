@@ -12,7 +12,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"main/proto"
+	"github.com/canavan-a/super-chat/shared/proto"
 	"main/push"
 )
 

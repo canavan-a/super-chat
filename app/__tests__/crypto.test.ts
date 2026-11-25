@@ -273,7 +273,7 @@ describe('invite links', () => {
 });
 
 // Writes a log built by this client for the Go server's tests to replay
-// (server/proto/interop_test.go), so the two implementations are checked
+// (shared/proto/interop_test.go), so the two implementations are checked
 // against each other. The fixture is committed; it's rewritten only when
 // missing or with WRITE_FIXTURE=1 (after changing the protocol), so normal
 // test runs don't churn it.
@@ -292,7 +292,7 @@ describe('interop fixture', () => {
       events,
       expect: {nextSeq: final.nextSeq, head: final.head, epoch: final.epoch, members: final.members},
     };
-    const file = path.resolve(__dirname, '../../server/proto/testdata/ts-log.json');
+    const file = path.resolve(__dirname, '../../shared/proto/testdata/ts-log.json');
     expect(replay(out.room, out.events).state.head).toBe(out.expect.head);
     if (process.env.WRITE_FIXTURE === '1' || !fs.existsSync(file)) {
       fs.mkdirSync(path.dirname(file), {recursive: true});

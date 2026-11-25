@@ -1,6 +1,6 @@
 // The room log, client side: building and signing events, and replaying a
 // log the server hands back while checking every rule ourselves. This is the
-// TypeScript twin of server/proto/room.go; the two must agree. The client
+// TypeScript twin of shared/proto/room.go; the two must agree. The client
 // never trusts the server's word for who is in a room or who is an admin.
 import {b64, concat, isId, pubFromMemberId, unb64, unutf8, utf8} from './encoding';
 import {aeadOpen, aeadSeal, sha256, sign, verify} from './primitives';

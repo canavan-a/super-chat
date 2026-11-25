@@ -1,6 +1,6 @@
-// Package proto is the server's copy of docs/protocol.md: identifiers,
-// signature checks and the room-log state machine. app/src/crypto is the
-// client's copy; the two must agree byte for byte.
+// Package proto is the Go copy of docs/protocol.md, shared by the server and
+// the bot SDK: identifiers, signature checks and the room-log state machine.
+// app/src/crypto is the client's copy; the two must agree byte for byte.
 package proto
 
 import (
