@@ -59,6 +59,10 @@ type Client = {
   in: (roomKey: string) => string;
 };
 
+// Every client a test makes, so afterEach can disconnect them all even when the
+// test fails partway: one left connected would otherwise run on into the next.
+const clients: Client[] = [];
+
 function client(server: string, entropy?: Uint8Array): Client {
   let c!: Client;
   jest.isolateModules(() => {
@@ -70,6 +74,7 @@ function client(server: string, entropy?: Uint8Array): Client {
     settings.settingsStore.update({servers: [server], defaultServer: server});
     c = {store, session, settings, crypto, entropy: me.entropy, in: (k: string) => store.getRoom(k)!.me.id};
   });
+  clients.push(c);
   return c;
 }
 
@@ -116,6 +121,10 @@ run('end to end', () => {
   afterAll(() => {
     server?.kill();
     fs.rmSync(dir, {recursive: true, force: true});
+  });
+
+  afterEach(() => {
+    for (const c of clients.splice(0)) c.store.disconnectAll();
   });
 
   it('creates, invites, chats, moderates and forgets', async () => {
@@ -237,7 +246,10 @@ run('end to end', () => {
     await new Promise(r => setTimeout(r, 300));
     const restored = client(url, alice.entropy);
     await restored.store.refreshRooms();
-    const names = restored.store.roomList().map(r => r.name).sort();
+    // The list titles a one-to-one chat by the other person and a chat you're
+    // alone in by your own name ("Bob", "Alice (You)"), so check the rooms'
+    // own names: both came back from the phrase.
+    const names = restored.store.roomList().map(r => restored.store.getRoom(r.key)?.view?.name).sort();
     expect(names).toEqual(['Den', 'Second']);
     expect(restored.in(key)).toBe(aliceId);
 
