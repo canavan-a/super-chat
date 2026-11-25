@@ -353,11 +353,20 @@ run('end to end', () => {
     };
     const bodies = (c: Client) =>
       c.store.getRoom(bobKey)!.messages.map((m: any) => (m.content?.t === 'text' ? m.content.body : '?'));
+    // markRead sends the receipt in the background, and the server counts
+    // unread from where the receipt lands (it can't read which message it
+    // names). One that lands after newer messages would count them as read,
+    // so wait until the server has it: it echoes our own receipt back.
+    const receiptLanded = () => {
+      const r = bob.store.getRoom(bobKey)!;
+      return r.latestOther && r.receipts[r.me.id] === r.latestOther.id;
+    };
 
     // Bob reads the first message (opening marks it read, as the screen does).
     await say(1);
     await bob.store.openRoom(bobKey);
     await bob.store.markRead(bobKey);
+    await until(receiptLanded);
 
     // A handful behind: the read position is already loaded, nothing to page.
     await say(5);
@@ -367,7 +376,7 @@ run('end to end', () => {
     await bob.store.jumpToRead(bobKey);
     expect(bob.store.getRoom(bobKey)!.hasNewer).toBe(false);
     expect(bodies(bob)).toEqual(['m0', 'm1', 'm2', 'm3', 'm4', 'm5']);
-    await new Promise(r => setTimeout(r, 300)); // the receipt goes out in the background
+    await until(receiptLanded);
 
     // Many behind, on a new install: the read position comes from the
     // server (Bob's receipt from his other device), not this device.
